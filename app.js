@@ -197,89 +197,87 @@ function actionHandler(action){const t=trips.find(t=>t.id===page.id);switch(acti
 function setupWorldTouchGestures(stage){
   const svg=stage?.querySelector('svg.vector-svg');
   if(!svg)return;
-  const snapshots=new Map();
-  let startDistance=0, startCenter=null, startView=null, originMoved=false;
   const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
-  function midpoint(a,b){return {x:(a.x+b.x)/2,y:(a.y+b.y)/2}}
-  function distance(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
-  function apply(center, distanceNow){
-    if(!startCenter||!startView)return;
-    const rect=svg.getBoundingClientRect();
-    if(rect.width<2||rect.height<2)return;
-    // Zoom uniforme attorno al centro delle due dita, pan fluido con un dito.
-    const factor=startDistance>0&&distanceNow>0?startDistance/distanceNow:1;
-    const width=clamp(startView[2]*factor,20,1000);
-    const height=clamp(startView[3]*factor,10,500);
-    const oldRelX=(startCenter.x-rect.left)/rect.width;
-    const oldRelY=(startCenter.y-rect.top)/rect.height;
-    const newRelX=(center.x-rect.left)/rect.width;
-    const newRelY=(center.y-rect.top)/rect.height;
-    const anchorX=startView[0]+oldRelX*startView[2];
-    const anchorY=startView[1]+oldRelY*startView[3];
-    const x=clamp(anchorX-newRelX*width,0,1000-width);
-    const y=clamp(anchorY-newRelY*height,0,500-height);
-    worldViews.world=[x,y,width,height];
-    svg.setAttribute('viewBox',worldViews.world.map(v=>v.toFixed(3)).join(' '));
-  }
-  function setBase(points){
-    if(!points.length){startCenter=null;return}
-    startCenter=points.length>=2?midpoint(points[0],points[1]):points[0];
-    startDistance=points.length>=2?distance(points[0],points[1]):0;
-    startView=(worldViews.world||[0,0,1000,500]).slice();
-  }
-  // iPhone/iPad: usare touchstart/touchmove sul SVG, non sul documento.
-  let touches=[];
-  svg.addEventListener('touchstart',event=>{
-    if(event.cancelable)event.preventDefault();
-    touches=Array.from(event.touches).map(t=>({x:t.clientX,y:t.clientY}));
-    setBase(touches);originMoved=false;
-  },{passive:false,capture:true});
-  svg.addEventListener('touchmove',event=>{
-    if(event.cancelable)event.preventDefault();
-    const curr=Array.from(event.touches).map(t=>({x:t.clientX,y:t.clientY}));
-    if(!curr.length)return;
-    if(curr.length!==touches.length){touches=curr;setBase(curr);return;}
-    const center=curr.length>=2?midpoint(curr[0],curr[1]):curr[0];
-    const dist=curr.length>=2?distance(curr[0],curr[1]):0;
-    if(startCenter&&(Math.abs(center.x-startCenter.x)>2||Math.abs(center.y-startCenter.y)>2||Math.abs(dist-startDistance)>3)){
-      mapWasDragged=true;originMoved=true;apply(center,dist);
-    }
-  },{passive:false,capture:true});
-  const finishTouch=event=>{
-    if(event.cancelable&&event.touches?.length)event.preventDefault();
-    touches=Array.from(event.touches||[]).map(t=>({x:t.clientX,y:t.clientY}));
-    setBase(touches);
-    if(!touches.length&&originMoved){setTimeout(()=>{mapWasDragged=false},500)}
+  const baseView=()=> (worldViews.world||[0,0,1000,500]).slice();
+  const mid=(a,b)=>({x:(a.clientX+b.clientX)/2,y:(a.clientY+b.clientY)/2});
+  const dist=(a,b)=>Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);
+  let gesture=null, moved=false;
+  const saveView=view=>{
+    worldViews.world=view;
+    svg.setAttribute('viewBox',view.map(n=>n.toFixed(3)).join(' '));
   };
-  svg.addEventListener('touchend',finishTouch,{passive:false,capture:true});
-  svg.addEventListener('touchcancel',finishTouch,{passive:false,capture:true});
-  // Safari talvolta invia un gesture event invece dei due tocchi standard.
-  let gestureBase=null;
-  svg.addEventListener('gesturestart',event=>{
-    event.preventDefault();gestureBase={scale:1,view:(worldViews.world||[0,0,1000,500]).slice(),x:event.clientX,y:event.clientY};
+  function begin(touchList){
+    const t=Array.from(touchList);
+    if(!t.length){gesture=null;return;}
+    gesture={
+      count:Math.min(t.length,2),
+      center:t.length>=2?mid(t[0],t[1]):{x:t[0].clientX,y:t[0].clientY},
+      distance:t.length>=2?Math.max(12,dist(t[0],t[1])):0,
+      view:baseView()
+    };
+  }
+  function update(touchList){
+    const t=Array.from(touchList);
+    if(!t.length)return;
+    const count=Math.min(t.length,2);
+    if(!gesture||gesture.count!==count){begin(t);return;}
+    const center=count===2?mid(t[0],t[1]):{x:t[0].clientX,y:t[0].clientY};
+    const rect=svg.getBoundingClientRect();
+    if(rect.width<10||rect.height<10)return;
+    let factor=1;
+    if(count===2){
+      const ratio=dist(t[0],t[1])/gesture.distance;
+      // Un solo flusso touch (niente gesturechange di Safari): sensibilità morbida.
+      // Consente sia di ingrandire sia di rimpicciolire senza salti improvvisi.
+      factor=clamp(Math.pow(Math.max(.1,ratio),-.60),1/1.65,1.65);
+    }
+    const old=gesture.view;
+    // Limiti uniformi: evita distorsioni e permette di tornare al mondo intero.
+    const sizeFactor=clamp(factor,125/old[2],1000/old[2]);
+    const newW=old[2]*sizeFactor,newH=old[3]*sizeFactor;
+    const oldX=clamp((gesture.center.x-rect.left)/rect.width,0,1);
+    const oldY=clamp((gesture.center.y-rect.top)/rect.height,0,1);
+    const newX=clamp((center.x-rect.left)/rect.width,0,1);
+    const newY=clamp((center.y-rect.top)/rect.height,0,1);
+    const anchorX=old[0]+oldX*old[2],anchorY=old[1]+oldY*old[3];
+    const next=[clamp(anchorX-newX*newW,0,1000-newW),clamp(anchorY-newY*newH,0,500-newH),newW,newH];
+    if(Math.abs(center.x-gesture.center.x)>3||Math.abs(center.y-gesture.center.y)>3||Math.abs(sizeFactor-1)>.015){
+      moved=true;mapWasDragged=true;
+    }
+    saveView(next);
+  }
+  // Su iPhone Safari può inviare sia touchmove sia gesturechange per lo stesso pinch.
+  // Ascoltiamo SOLO touchmove per evitare che lo zoom venga moltiplicato due volte.
+  svg.addEventListener('touchstart',e=>{
+    if(e.cancelable)e.preventDefault();
+    begin(e.touches);
+    moved=false;
   },{passive:false});
-  svg.addEventListener('gesturechange',event=>{
-    if(!gestureBase)return;
-    event.preventDefault();mapWasDragged=true;
-    startView=gestureBase.view;startCenter={x:gestureBase.x,y:gestureBase.y};startDistance=1;
-    apply({x:event.clientX,y:event.clientY},event.scale);
+  svg.addEventListener('touchmove',e=>{
+    if(e.cancelable)e.preventDefault();
+    update(e.touches);
   },{passive:false});
-  svg.addEventListener('gestureend',event=>{event.preventDefault();gestureBase=null;setTimeout(()=>{mapWasDragged=false},500)},{passive:false});
-  // Desktop: trascina con mouse (gli eventi touch sono gestiti separatamente).
+  const finish=e=>{
+    if(e.cancelable)e.preventDefault();
+    begin(e.touches);
+    if(!e.touches.length&&moved){setTimeout(()=>{mapWasDragged=false;},450);}
+  };
+  svg.addEventListener('touchend',finish,{passive:false});
+  svg.addEventListener('touchcancel',finish,{passive:false});
+  // Mouse desktop, indipendente dai gesti touch.
   let mouse=null;
-  svg.addEventListener('pointerdown',event=>{
-    if(event.pointerType==='touch')return;
-    mouse={x:event.clientX,y:event.clientY};
-    svg.setPointerCapture?.(event.pointerId);
+  svg.addEventListener('pointerdown',e=>{
+    if(e.pointerType==='touch')return;
+    mouse={x:e.clientX,y:e.clientY};svg.setPointerCapture?.(e.pointerId);
   });
-  svg.addEventListener('pointermove',event=>{
+  svg.addEventListener('pointermove',e=>{
     if(!mouse)return;
-    const dx=event.clientX-mouse.x,dy=event.clientY-mouse.y;
-    if(Math.abs(dx)+Math.abs(dy)>1){mapWasDragged=true;panMapView('world',dx,dy,svg.parentElement)}
-    mouse={x:event.clientX,y:event.clientY};
+    const dx=e.clientX-mouse.x,dy=e.clientY-mouse.y;
+    if(Math.abs(dx)+Math.abs(dy)>1){mapWasDragged=true;panMapView('world',dx,dy,svg.parentElement);}
+    mouse={x:e.clientX,y:e.clientY};
   });
-  svg.addEventListener('pointerup',()=>{mouse=null;setTimeout(()=>{mapWasDragged=false},400)});
-  svg.addEventListener('pointercancel',()=>{mouse=null});
+  svg.addEventListener('pointerup',()=>{mouse=null;setTimeout(()=>{mapWasDragged=false;},400);});
+  svg.addEventListener('pointercancel',()=>{mouse=null;});
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&worldFullscreen){worldFullscreen=false;document.body.classList.remove('map-open');drawWorldMap()}});
 document.addEventListener('click',e=>{if(!activeUser)return;if(mapWasDragged&&e.target.closest('.world-map-stage'))return;const remove=e.target.closest('[data-remove-country]');if(remove){updateManualCountry(remove.dataset.removeCountry,false).catch(err=>toast(err.message));return}const zoom=e.target.closest('[data-map-zoom]');if(zoom){changeMapZoom(zoom.dataset.mapKey,zoom.dataset.mapZoom);return}const worldStage=e.target.closest('.world-map-stage');if(worldStage&&page.screen==='world'&&!worldFullscreen&&!e.target.closest('[data-map-zoom]')&&!mapWasDragged){actionHandler('world-expand');return}const country=e.target.closest('[data-country]');if(country&&page.screen==='world'){const f=worldGeo?.features.find(f=>f.properties.iso===country.dataset.country);if(f)toast(f.properties.name+(visitedCodes().has(f.properties.iso)?' · visitato':' · da esplorare'));return}const expense=e.target.closest('[data-expense]');if(expense){const t=trips.find(t=>t.id===page.id);openModal('expense',t?.expenses.find(x=>x.id===expense.dataset.expense));return}const trip=e.target.closest('[data-trip]');if(trip){selectTrip(trip.dataset.trip);return}const year=e.target.closest('[data-year]');if(year){selectYear(Number(year.dataset.year));return}const act=e.target.closest('[data-action]');if(act)actionHandler(act.dataset.action)});
