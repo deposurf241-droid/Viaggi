@@ -67,7 +67,7 @@ async function removeTrip(id){
 }
 const selectYear=y=>{page={screen:'year',year:y,id:null};render();window.scrollTo(0,0)};
 const selectTrip=id=>{page={screen:'trip',year:null,id};render();window.scrollTo(0,0)};
-const goHome=()=>{worldFullscreen=false;document.body.classList.remove('map-open');page={screen:'home',year:null,id:null};render();window.scrollTo(0,0)};
+const goHome=()=>{worldFullscreen=false;document.body.classList.remove('map-open');document.getElementById('world-fullscreen-portal')?.remove();document.body.style.overflow='';page={screen:'home',year:null,id:null};render();window.scrollTo(0,0)};
 function authScreen(){
   const note=authError?`<p role="alert" style="color:#a22;font-size:14px;overflow-wrap:anywhere">${esc(authError)}</p>`:'';
   return `<div class="app-shell"><main class="main" style="min-height:95vh;display:flex;align-items:center;justify-content:center;padding:24px"><section class="panel" style="width:min(100%,430px);padding:30px 24px;text-align:center;background:#fffaf0;border:1px solid #d7c4a1;border-radius:20px;box-shadow:0 12px 40px #102a4920"><img src="assets/icon.svg" alt="" style="width:74px;height:74px;margin:auto"><h1 style="font-family:Playfair Display,serif;color:#183b61;margin:12px 0 0">Viaggi</h1><p style="color:#736b5e;margin:4px 0 26px">Around the World · Diario privato</p>${note}${!authReady?'<p>Collegamento a Firebase…</p>':`<form id="login-form" style="text-align:left;display:grid;gap:12px"><label for="login-email">Email</label><input id="login-email" type="email" autocomplete="username" required placeholder="La tua email" style="width:100%;padding:14px;border-radius:10px;border:1px solid #bdb7aa;font-size:16px"><label for="login-password">Password</label><input id="login-password" type="password" autocomplete="current-password" required placeholder="La tua password" style="width:100%;padding:14px;border-radius:10px;border:1px solid #bdb7aa;font-size:16px"><button class="btn primary" type="submit" ${!cloud?'disabled':''} style="margin-top:10px;justify-content:center">🔐 Accedi</button></form>`}<p style="font-size:12px;color:#716b62;margin-top:22px">Accesso riservato. Non è prevista la registrazione.</p></section></main></div>`;
@@ -157,10 +157,35 @@ function drawMap(t){const target=modal?.type==='map'?document.querySelector('.sh
 }
 function worldPage(){return `<button class="back" data-action="home">← Torna al diario</button><section class="panel world-overview"><div class="world-intro"><div><div class="eyebrow">✧ Il passaporto di 3P ✧</div><h1>🌍 3P Map</h1><p class="muted">In oro i Paesi visitati. Tocca uno Stato per conoscerne il nome, apri la mappa grande per spostarti e ingrandire.</p></div><strong style="font-size:24px;color:#173c64" id="country-count"></strong></div><button class="btn primary world-expand-btn" data-action="world-expand">⛶ Apri mappa a schermo intero</button><div id="world-map" style="margin-top:15px"></div><div class="world-key"><span><i class="swatch" style="background:#d7a85e"></i>Visitato</span><span><i class="swatch" style="background:#e6dfca"></i>Da esplorare</span></div><section class="manual-countries"><h2>✚ Aggiungi un Paese visitato</h2><p class="muted">Anche senza viaggio o spese: scegli una nazione e la salvi nel tuo passaporto su Firebase.</p><form id="add-country-form" class="country-form"><label for="country-select">Paese</label><select id="country-select" name="country" required><option value="">Seleziona un Paese…</option>${worldGeo.features.filter(f=>f.properties.iso&&f.properties.iso!=='-99').sort((a,b)=>a.properties.name.localeCompare(b.properties.name,'it')).map(f=>`<option value="${esc(f.properties.iso)}">${esc(f.properties.name)}</option>`).join('')}</select><button class="btn primary" type="submit">+ Segna come visitato</button></form><p class="muted" style="font-size:12px">I Paesi aggiunti manualmente sono contrassegnati con ✕ e puoi rimuoverli dalla lista.</p></section><p class="muted country-denominator">Su 195 Stati del mondo (193 membri ONU + 2 osservatori). La mappa usa confini geografici semplificati.</p><h2>Paesi visitati</h2><div id="countries-list" class="country-tags"></div><p class="muted" style="font-size:12px">I Paesi sono ricavati dai viaggi e dalle aggiunte manuali. La cartografia è schematica, con confini semplificati.</p></section>`}
 function drawWorldMap(){const target=$('#world-map');if(!target)return;
-  target.innerHTML=`<div class="world-map-stage${worldFullscreen?' fullscreen':''}" style="${worldFullscreen?'position:fixed;inset:0;z-index:2200;width:100vw;height:100dvh;':'position:relative;'}">${worldFullscreen?'<div class="map-fullbar"><strong>🌍 3P Map · Trascina con il dito per esplorare</strong><button type="button" class="btn" data-action="world-close">✕ Chiudi</button></div>':''}${mapSvg([],'world',true)}<div class="country-tap-label" role="status" aria-live="polite" style="display:none;position:absolute;bottom:65px;left:50%;transform:translateX(-50%);background:#173c64;color:#fff;border:1px solid #e8d7a8;border-radius:14px;padding:12px 18px;font:600 15px system-ui;box-shadow:0 8px 26px #0005;z-index:99999;pointer-events:none;text-align:center;white-space:nowrap;max-width:90%"></div></div>`;
+  // Clean up any previous full-screen surface before recreating the map.
+ document.getElementById('world-fullscreen-portal')?.remove();
+ target.innerHTML=`<div class="world-map-stage${worldFullscreen?' fullscreen':''}">${worldFullscreen?'<div class="map-fullbar"><strong>🌍 3P Map · Trascina con il dito per esplorare</strong><button type="button" class="btn" data-action="world-close">✕ Chiudi</button></div>':''}${mapSvg([],'world',true)}<div class="country-tap-label" role="status" aria-live="polite" style="display:none;position:absolute;bottom:65px;left:50%;transform:translateX(-50%);background:#173c64;color:#fff;border:1px solid #e8d7a8;border-radius:14px;padding:12px 18px;font:600 15px system-ui;box-shadow:0 8px 26px #0005;z-index:99999;pointer-events:none;text-align:center;white-space:nowrap;max-width:90%"></div></div>`;
+ const stage=target.querySelector('.world-map-stage');
+ if(worldFullscreen && stage){
+   // The portal is a direct child of BODY, not a child of the centered .app-shell.
+   // Position:fixed now uses the real iPhone viewport, not the card dimensions.
+   const portal=document.createElement('div');
+   portal.id='world-fullscreen-portal';
+   portal.setAttribute('role','dialog');
+   portal.setAttribute('aria-label','3P Map a schermo intero');
+   portal.style.cssText='position:fixed!important;inset:0!important;width:100vw!important;height:100dvh!important;z-index:2147483646!important;background:#f8f5ec!important;overflow:hidden!important;display:flex!important;flex-direction:column!important;';
+   document.body.appendChild(portal);
+   portal.appendChild(stage);
+   stage.style.cssText='position:relative!important;display:flex!important;flex-direction:column!important;width:100%!important;height:100%!important;min-height:0!important;max-height:100%!important;margin:0!important;padding:0!important;overflow:hidden!important;border-radius:0!important;';
+   const wrap=stage.querySelector('.vector-wrap');
+   if(wrap){wrap.style.cssText='display:flex!important;flex:1 1 auto!important;flex-direction:column!important;min-height:0!important;min-width:0!important;width:100%!important;max-width:none!important;height:auto!important;margin:0!important;border-radius:0!important;overflow:hidden!important;';}
+   const svg=stage.querySelector('svg.vector-svg');
+   if(svg){svg.style.cssText='display:block!important;width:100%!important;height:100%!important;flex:1 1 auto!important;min-height:0!important;touch-action:none!important;';}
+   const bar=stage.querySelector('.map-fullbar');
+   if(bar){bar.style.cssText='flex:0 0 auto!important;display:flex!important;align-items:center!important;justify-content:space-between!important;gap:10px!important;padding:calc(12px + env(safe-area-inset-top, 0px)) 16px 12px!important;background:#102a49!important;color:white!important;';}
+   document.body.style.overflow='hidden';
+ }else{
+   stage?.style.setProperty('position','relative','important');
+   document.body.style.overflow='';
+ }
  const visited=visitedCodes();const names=worldGeo.features.filter(f=>visited.has(f.properties.iso)).sort((a,b)=>a.properties.name.localeCompare(b.properties.name,'it'));
  const counter=$('#country-count');if(counter)counter.textContent=names.length+' / 195 Paesi';
- setupWorldTouchGestures(target.querySelector('.world-map-stage'));
+ setupWorldTouchGestures(stage);
  const listing=$('#countries-list');if(listing)listing.innerHTML=names.map(f=>{const manual=manualVisited.includes(f.properties.iso);return `<span class="country-tag">✓ ${esc(f.properties.name)}${manual?` <button class="country-remove" type="button" data-remove-country="${esc(f.properties.iso)}" aria-label="Rimuovi ${esc(f.properties.name)}">✕</button>`:''}</span>`}).join('')||'Nessun Paese ancora';
 }
 async function updateManualCountry(iso,add){if(!activeUser||!cloud)throw new Error('Accedi prima di modificare i Paesi');
