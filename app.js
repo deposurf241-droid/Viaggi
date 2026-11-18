@@ -1,11 +1,8 @@
 import { firebaseConfig } from './firebase-config.js';
-import archive from './data/viaggi-storici.js';
 
 const CATS=['Voli e trasporti lunghi','Alloggio','Trasporti locali e veicolo','Cibo e drink','Attività e divertimento','Regali e shopping','Assicurazione / visti / SIM'];
 const COLORS=['#183b61','#8cb0a7','#d0a451','#dc917a','#9c83b5','#ba795c','#8c9a9f'];
 const EMOJI=['✈️','🏨','🚕','🍝','🎟️','🛍️','🧾'];
-const dbKey='viaggi-v1';
-const cloned=()=>structuredClone(archive);
 const $=sel=>document.querySelector(sel);
 const esc=(s='')=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=n=>new Intl.NumberFormat('it-IT',{style:'currency',currency:'EUR'}).format(Number(n)||0);
@@ -16,14 +13,11 @@ const duration=t=>Math.max(1,Math.round((new Date(`${t.endDate}T12:00:00`)-new D
 const tripYear=t=>Number(t.startDate?.slice(0,4))||new Date().getFullYear();
 const num=v=>Number(String(v).replace(',','.'));
 let trips=[];let page={screen:'home',year:null,id:null};let modal=null;let chart=null;let map=null;let cloud=null;let activeUser=null;let unsubscribe=null;let inCloud=false;
-let seedMode=false;
+let authReady=false; let authError='';
 function toast(message){const el=$('#toast');el.textContent=message;el.style.display='block';setTimeout(()=>{if(el.textContent===message)el.style.display='none'},3500)}
-function getLocal(){try{const v=JSON.parse(localStorage.getItem(dbKey));if(Array.isArray(v))return v;}catch{}return null}
-function setLocal(){localStorage.setItem(dbKey,JSON.stringify(trips))}
-function initLocal(){trips=getLocal()??cloned();if(!getLocal())setLocal()}
 function uid(){return 'new-'+(crypto.randomUUID?.()||`${Date.now()}-${Math.random()}`)}
 async function initFirebase(){
-  if(!firebaseConfig?.apiKey||!firebaseConfig?.projectId){render();return;}
+  if(!firebaseConfig?.apiKey||!firebaseConfig?.projectId){authError='Configurazione Firebase mancante.';authReady=true;render();return;}
   try{
     const version='11.10.0';
     const appmod=await import(`https://www.gstatic.com/firebasejs/${version}/firebase-app.js`);
@@ -33,49 +27,50 @@ async function initFirebase(){
     cloud={auth,db,...authmod,...firemod};
     authmod.onAuthStateChanged(auth,user=>{
       if(unsubscribe){unsubscribe();unsubscribe=null}
-      activeUser=user;inCloud=!!user;
+      activeUser=user;inCloud=!!user;authReady=true;authError='';
+      trips=[];page={screen:'home',year:null,id:null};modal=null;render();
       if(user){
-        trips=[];render();
         const q=firemod.collection(db,'users',user.uid,'trips');
         unsubscribe=firemod.onSnapshot(q,snap=>{
           trips=snap.docs.map(x=>({id:x.id,...x.data()}));render();
-        },err=>{toast('Errore Firestore: '+err.message);trips=getLocal()??cloned();inCloud=false;render()});
-      }else{trips=getLocal()??cloned();render()}
-    });
-  }catch(err){console.error(err);toast('Firebase non disponibile: si usa il salvataggio locale');render()}
+        },err=>{authError='Errore nel caricamento dei dati: '+err.message;trips=[];render()});
+      }
+    },err=>{authReady=true;authError='Errore di autenticazione: '+err.message;render()});
+  }catch(err){console.error(err);authError='Impossibile collegarsi a Firebase: '+err.message;authReady=true;render()}
 }
 async function locatePlace(place){
   if(!place)return null;try{const response=await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent(place),{headers:{'Accept-Language':'it'}});if(!response.ok)return null;const data=await response.json();return data[0]?{lat:Number(data[0].lat),lng:Number(data[0].lon)}:null}catch{return null}
 }
-async function login(){if(!cloud)return toast('Prima configura Firebase nel file firebase-config.js');try{await cloud.signInWithPopup(cloud.auth,new cloud.GoogleAuthProvider())}catch(err){toast('Accesso non riuscito: '+err.message)}}
+async function login(email,password){
+  if(!cloud)throw new Error('Firebase non è ancora disponibile');
+  await cloud.signInWithEmailAndPassword(cloud.auth,email,password);
+}
 async function logout(){if(cloud)await cloud.signOut(cloud.auth)}
 async function store(t){
-  if(inCloud&&activeUser){await cloud.setDoc(cloud.doc(cloud.db,'users',activeUser.uid,'trips',t.id),t)}
-  else{const idx=trips.findIndex(x=>x.id===t.id);if(idx<0)trips.push(t);else trips[idx]=t;setLocal();render()}
+  if(!inCloud||!activeUser)throw new Error('Accedi per salvare il viaggio');
+  await cloud.setDoc(cloud.doc(cloud.db,'users',activeUser.uid,'trips',t.id),t);
 }
-async function removeTrip(id){if(inCloud&&activeUser)await cloud.deleteDoc(cloud.doc(cloud.db,'users',activeUser.uid,'trips',id));else{trips=trips.filter(t=>t.id!==id);setLocal();render()}}
-async function importArchive(){
-  const existing=new Set(trips.map(t=>t.id));const missing=archive.filter(t=>!existing.has(t.id));
-  if(!missing.length){toast('I viaggi storici sono già presenti');return}
-  if(!confirm(`Importare ${missing.length} viaggi storici senza sostituire quelli esistenti?`))return;
-  try{
-    if(inCloud&&activeUser){for(let i=0;i<missing.length;i+=400){const batch=cloud.writeBatch(cloud.db);for(const t of missing.slice(i,i+400))batch.set(cloud.doc(cloud.db,'users',activeUser.uid,'trips',t.id),t);await batch.commit()}}
-    else{trips.push(...cloned().filter(t=>!existing.has(t.id)));setLocal();render()}
-    toast('Archivio importato correttamente!')
-  }catch(e){toast('Importazione fallita: '+e.message)}
+async function removeTrip(id){
+  if(!inCloud||!activeUser)throw new Error('Accedi per eliminare il viaggio');
+  await cloud.deleteDoc(cloud.doc(cloud.db,'users',activeUser.uid,'trips',id));
 }
 const selectYear=y=>{page={screen:'year',year:y,id:null};render();window.scrollTo(0,0)};
 const selectTrip=id=>{page={screen:'trip',year:null,id};render();window.scrollTo(0,0)};
 const goHome=()=>{page={screen:'home',year:null,id:null};render();window.scrollTo(0,0)};
+function authScreen(){
+  const note=authError?`<p role="alert" style="color:#a22;font-size:14px;overflow-wrap:anywhere">${esc(authError)}</p>`:'';
+  return `<div class="app-shell"><main class="main" style="min-height:95vh;display:flex;align-items:center;justify-content:center;padding:24px"><section class="panel" style="width:min(100%,430px);padding:30px 24px;text-align:center;background:#fffaf0;border:1px solid #d7c4a1;border-radius:20px;box-shadow:0 12px 40px #102a4920"><img src="assets/icon.svg" alt="" style="width:74px;height:74px;margin:auto"><h1 style="font-family:Playfair Display,serif;color:#183b61;margin:12px 0 0">Viaggi</h1><p style="color:#736b5e;margin:4px 0 26px">Around the World · Diario privato</p>${note}${!authReady?'<p>Collegamento a Firebase…</p>':`<form id="login-form" style="text-align:left;display:grid;gap:12px"><label for="login-email">Email</label><input id="login-email" type="email" autocomplete="username" required placeholder="La tua email" style="width:100%;padding:14px;border-radius:10px;border:1px solid #bdb7aa;font-size:16px"><label for="login-password">Password</label><input id="login-password" type="password" autocomplete="current-password" required placeholder="La tua password" style="width:100%;padding:14px;border-radius:10px;border:1px solid #bdb7aa;font-size:16px"><button class="btn primary" type="submit" ${!cloud?'disabled':''} style="margin-top:10px;justify-content:center">🔐 Accedi</button></form>`}<p style="font-size:12px;color:#716b62;margin-top:22px">Accesso riservato. Non è prevista la registrazione.</p></section></main></div>`;
+}
 function render(){
   if(chart){chart.destroy();chart=null}if(map){map.remove();map=null}
+  if(!activeUser){$('#app').innerHTML=authScreen();return}
   let content=page.screen==='home'?home():page.screen==='year'?yearPage(page.year):tripPage(page.id);
-  $('#app').innerHTML=`<div class="app-shell"><header class="topbar"><button class="brand" data-action="home"><img src="assets/icon.svg" alt=""><span><b>Viaggi</b><small>Around the World</small></span></button><div class="top-actions"><span class="pill ${inCloud?'':'local'}">${inCloud?'☁️ Cloud':'📱 Locale'}</span>${activeUser?`<button class="btn ghost tiny" data-action="logout">Esci</button>`:cloud?`<button class="btn ghost tiny" data-action="login">Accedi con Google</button>`:''}<button class="btn gold tiny" data-action="new">+ Viaggio</button></div></header><main class="main">${content}</main><footer class="footer">✈️ Il tuo mondo, i tuoi viaggi, le tue spese · ${inCloud?'Salvati su Firebase':'Salvati su questo dispositivo'}</footer></div>${modal?modalHtml():''}`;
+  $('#app').innerHTML=`<div class="app-shell"><header class="topbar"><button class="brand" data-action="home"><img src="assets/icon.svg" alt=""><span><b>Viaggi</b><small>Around the World</small></span></button><div class="top-actions"><span class="pill">☁️ Privato</span><button class="btn ghost tiny" data-action="logout">Esci</button><button class="btn gold tiny" data-action="new">+ Viaggio</button></div></header><main class="main">${authError?`<p class="notice">${esc(authError)}</p>`:''}${content}</main><footer class="footer">✈️ Il tuo mondo, i tuoi viaggi, le tue spese · Firebase</footer></div>${modal?modalHtml():''}`;
   if(page.screen==='trip'){const t=trips.find(t=>t.id===page.id);if(t){drawChart(t);drawMap(t)}}
 }
 function home(){
  const total=round(trips.reduce((a,t)=>a+sum(t),0));const ys=[...new Set(trips.map(tripYear))].sort((a,b)=>a-b);
- return `<section class="hero"><div class="eyebrow">✧ Colleziona momenti, non cose ✧</div><h1>Around the World</h1><p>Un diario personale di destinazioni, ricordi e spese. Ogni viaggio è una storia da conservare.</p></section><div class="stats"><div class="stat"><strong>${trips.length}</strong><small>Viaggi</small></div><div class="stat"><strong>${ys.length}</strong><small>Anni</small></div><div class="stat"><strong>${fmt(total)}</strong><small>Spesa totale</small></div></div><div class="section-head"><h2>Il tuo diario</h2><button class="btn primary" data-action="new">+ Nuovo viaggio</button></div><div class="years">${ys.map(y=>{const list=trips.filter(t=>tripYear(t)===y);return `<button class="year-card" data-year="${y}"><div class="year">${y} ✧</div><div class="foot"><small>${list.length} ${list.length===1?'viaggio':'viaggi'}</small><strong>${fmt(list.reduce((a,t)=>a+sum(t),0))}</strong></div></button>`}).join('')||'<div class="panel empty">Nessun viaggio ancora. Aggiungine uno!</div>'}</div><div class="panel"><div class="section-head"><h2>Il tuo archivio</h2></div><p class="muted">Puoi aggiungere nuovi viaggi, aggiornare le spese e modificare le date in qualsiasi momento.</p><div class="inline-actions"><button class="btn" data-action="import">📚 Importa viaggi storici</button><button class="btn" data-action="export">⬇️ Esporta backup JSON</button><button class="btn" data-action="import-json">⬆️ Ripristina backup</button><input id="backup-input" type="file" accept="application/json,.json" hidden></div>${!inCloud?'<p class="notice">I dati in modalità locale rimangono solo in questo browser: usa il backup oppure collega Firebase e accedi con Google per conservarli sul cloud.</p>':''}</div>`;
+ return `<section class="hero"><div class="eyebrow">✧ Colleziona momenti, non cose ✧</div><h1>Around the World</h1><p>Un diario personale di destinazioni, ricordi e spese. Ogni viaggio è una storia da conservare.</p></section><div class="stats"><div class="stat"><strong>${trips.length}</strong><small>Viaggi</small></div><div class="stat"><strong>${ys.length}</strong><small>Anni</small></div><div class="stat"><strong>${fmt(total)}</strong><small>Spesa totale</small></div></div><div class="section-head"><h2>Il tuo diario</h2><button class="btn primary" data-action="new">+ Nuovo viaggio</button></div><div class="years">${ys.map(y=>{const list=trips.filter(t=>tripYear(t)===y);return `<button class="year-card" data-year="${y}"><div class="year">${y} ✧</div><div class="foot"><small>${list.length} ${list.length===1?'viaggio':'viaggi'}</small><strong>${fmt(list.reduce((a,t)=>a+sum(t),0))}</strong></div></button>`}).join('')||'<div class="panel empty">Nessun viaggio ancora. Aggiungine uno!</div>'}</div><div class="panel"><div class="section-head"><h2>Il tuo archivio</h2></div><p class="muted">Puoi aggiungere nuovi viaggi, aggiornare le spese e modificare le date in qualsiasi momento.</p><div class="inline-actions"><button class="btn" data-action="export">⬇️ Esporta backup JSON</button><button class="btn" data-action="import-json">⬆️ Importa viaggi / backup</button><input id="backup-input" type="file" accept="application/json,.json" hidden></div><p class="muted" style="font-size:12px">Per importare i viaggi storici seleziona il file privato viaggi-storici.json dal telefono. Non caricarlo su GitHub.</p></div>`;
 }
 function yearPage(year){const list=trips.filter(t=>tripYear(t)===year).sort((a,b)=>a.startDate.localeCompare(b.startDate));const total=round(list.reduce((a,t)=>a+sum(t),0));return `<button class="back" data-action="home">← Tutti gli anni</button><div class="section-head"><div><div class="eyebrow">L'anno dei ricordi</div><h1 style="font-size:45px;margin:8px 0">${year}</h1><p class="subtitle muted">${list.length} viaggi · ${fmt(total)}</p></div><button class="btn primary" data-action="new">+ Viaggio</button></div><div class="trip-list">${list.map(t=>`<button class="trip-card" data-trip="${esc(t.id)}"><div class="trip-icon">🌍</div><h3>${esc(t.name)}</h3><small>${datefmt(t.startDate)} – ${datefmt(t.endDate)}</small><div class="money">${fmt(sum(t))}</div>${t.review?'<div class="source-chip">⚠️ Anno da verificare</div>':''}</button>`).join('')}</div>`}
 function tripPage(id){const t=trips.find(t=>t.id===id);if(!t){page.screen='home';return home()}const total=round(sum(t));const catValues=CATS.map((c,i)=>({name:c,value:round(t.expenses.filter(e=>e.category===c).reduce((a,e)=>a+Number(e.amount),0)),color:COLORS[i]}));return `<button class="back" data-year="${tripYear(t)}">← Viaggi ${tripYear(t)}</button><div class="section-head"><div><div class="eyebrow">✧ Passaporto dei ricordi</div><h1 style="margin:8px 0 4px;font-size:clamp(33px,5vw,49px)">${esc(t.name)}</h1><p class="muted">${datefmt(t.startDate)} – ${datefmt(t.endDate)} · ${duration(t)} giorni</p></div><div class="inline-actions"><button class="btn" data-action="edit-trip">✏️ Modifica</button><button class="btn danger" data-action="delete-trip">Elimina</button></div></div><div class="stats"><div class="stat"><strong>${fmt(total)}</strong><small>Spesa totale</small></div><div class="stat"><strong>${fmt(round(total/duration(t)))}</strong><small>Media al giorno</small></div><div class="stat"><strong>${(t.expenses||[]).length}</strong><small>Voci di spesa</small></div></div>${t.review?`<div class="notice">⚠️ Da verificare: il documento TXT del viaggio indica un anno diverso dal riepilogo PDF. Puoi correggere le date da “Modifica”.</div>`:''}${t.reportedTotal!=null&&Math.abs(total-t.reportedTotal)>.01?`<div class="notice">Totale riportato nel PDF: ${fmt(t.reportedTotal)}. Somma delle categorie: ${fmt(total)}. Verifica la differenza.</div>`:''}<div class="split"><section class="panel"><h2 class="section-title">Dove sono finiti i soldi?</h2><div class="chart-holder"><canvas id="pie" aria-label="Ripartizione delle spese per categoria"></canvas></div></section><section class="panel"><h2 class="section-title">Categorie</h2><ul class="breakdown">${catValues.filter(x=>x.value>0).map(x=>`<li><span><i class="dot" style="background:${x.color}"></i>${esc(x.name)}</span><b>${fmt(x.value)}</b></li>`).join('')||'<li>Non hai ancora spese.</li>'}</ul></section></div><section class="panel"><div class="section-head"><h2>Le tue spese</h2><button class="btn primary" data-action="add-expense">+ Aggiungi spesa</button></div>${(t.expenses||[]).length? t.expenses.map(e=>`<div class="expense-row"><div><b>${esc(e.description||e.category)}</b><small>${esc(e.category)} · ${datefmt(e.date)}${e.summary?' · riepilogo PDF':''}</small></div><strong>${fmt(e.amount)}</strong><button class="btn tiny" data-expense="${esc(e.id)}">✏️</button></div>`).join(''):'<p class="muted">Nessuna spesa. Aggiungi la prima!</p>'}</section><section class="panel"><div class="section-head"><h2>📍 Mappa del viaggio</h2><button class="btn tiny" data-action="expand-map">Espandi</button></div><div id="map" class="map"></div><p class="muted" style="font-size:12px">Le tappe sono una traccia indicativa, non un percorso GPS. Puoi aggiungerle e riordinarle da “Modifica”.</p></section>${t.notes?`<section class="panel"><h2>Ricordi</h2><p>${esc(t.notes).replaceAll('\n','<br>')}</p></section>`:''}${t.originalNotes?`<section class="panel"><details><summary><b>📜 Note di spesa originali</b> (dal file caricato)</summary><p class="notice">Le note originali sono conservate per consultazione: non vengono sommate di nuovo alle categorie del PDF, per evitare duplicazioni.</p><div class="original">${esc(t.originalNotes)}</div></details></section>`:''}`}
@@ -90,9 +85,17 @@ function modalHtml(){
 }
 function openModal(type,item=null){modal={type,item};render();if(type==='map')drawMap(trips.find(t=>t.id===page.id),true)}
 function closeModal(){modal=null;render()}
-function actionHandler(action){const t=trips.find(t=>t.id===page.id);switch(action){case'home':goHome();break;case'new':openModal('trip');break;case'close':closeModal();break;case'login':login();break;case'logout':logout();break;case'import':importArchive();break;case'export':exportBackup();break;case'import-json':$('#backup-input')?.click();break;case'edit-trip':openModal('trip',t);break;case'add-expense':openModal('expense');break;case'expand-map':openModal('map');break;case'delete-trip':if(t&&confirm(`Eliminare definitivamente “${t.name}”?`)){removeTrip(t.id).then(goHome).catch(e=>toast(e.message))}break;case'delete-expense':if(t&&modal?.item&&confirm('Eliminare questa spesa?')){store({...t,expenses:t.expenses.filter(e=>e.id!==modal.item.id)}).then(closeModal).catch(e=>toast(e.message))}break;}}
-document.addEventListener('click',e=>{const expense=e.target.closest('[data-expense]');if(expense){const t=trips.find(t=>t.id===page.id);openModal('expense',t?.expenses.find(x=>x.id===expense.dataset.expense));return}const trip=e.target.closest('[data-trip]');if(trip){selectTrip(trip.dataset.trip);return}const year=e.target.closest('[data-year]');if(year){selectYear(Number(year.dataset.year));return}const act=e.target.closest('[data-action]');if(act)actionHandler(act.dataset.action)});
-document.addEventListener('submit',async e=>{if(!['trip-form','expense-form'].includes(e.target.id))return;e.preventDefault();const form=e.target;const values=Object.fromEntries(new FormData(form));const btn=form.querySelector('[type=submit]');btn.disabled=true;try{
+function actionHandler(action){const t=trips.find(t=>t.id===page.id);switch(action){case'home':goHome();break;case'new':openModal('trip');break;case'close':closeModal();break;case'logout':logout();break;case'export':exportBackup();break;case'import-json':$('#backup-input')?.click();break;case'edit-trip':openModal('trip',t);break;case'add-expense':openModal('expense');break;case'expand-map':openModal('map');break;case'delete-trip':if(t&&confirm(`Eliminare definitivamente “${t.name}”?`)){removeTrip(t.id).then(goHome).catch(e=>toast(e.message))}break;case'delete-expense':if(t&&modal?.item&&confirm('Eliminare questa spesa?')){store({...t,expenses:t.expenses.filter(e=>e.id!==modal.item.id)}).then(closeModal).catch(e=>toast(e.message))}break;}}
+document.addEventListener('click',e=>{if(!activeUser)return;const expense=e.target.closest('[data-expense]');if(expense){const t=trips.find(t=>t.id===page.id);openModal('expense',t?.expenses.find(x=>x.id===expense.dataset.expense));return}const trip=e.target.closest('[data-trip]');if(trip){selectTrip(trip.dataset.trip);return}const year=e.target.closest('[data-year]');if(year){selectYear(Number(year.dataset.year));return}const act=e.target.closest('[data-action]');if(act)actionHandler(act.dataset.action)});
+document.addEventListener('submit',async e=>{
+ if(e.target.id==='login-form'){
+   e.preventDefault();const form=e.target;const btn=form.querySelector('button[type=submit]');btn.disabled=true;
+   try{await login(form.querySelector('#login-email').value.trim(),form.querySelector('#login-password').value)}
+   catch(err){authError=err.code==='auth/invalid-credential'?'Email o password non corretti.':err.code==='auth/too-many-requests'?'Troppi tentativi. Riprova più tardi.':err.message;render()}
+   return;
+ }
+ if(!activeUser)return;
+ if(!['trip-form','expense-form'].includes(e.target.id))return;e.preventDefault();const form=e.target;const values=Object.fromEntries(new FormData(form));const btn=form.querySelector('[type=submit]');btn.disabled=true;try{
  if(form.id==='trip-form'){
   if(values.endDate<values.startDate)throw new Error('La data di ritorno deve essere successiva o uguale alla partenza');
   const old=modal?.item;const stops=values.stops.split('\n').map(s=>s.trim()).filter(Boolean).map(name=>({name,...(old?.stops?.find(s=>s.name===name)||{})}));
@@ -103,5 +106,16 @@ document.addEventListener('submit',async e=>{if(!['trip-form','expense-form'].in
  }
 }catch(err){btn.disabled=false;toast(err.message)}});
 function exportBackup(){const blob=new Blob([JSON.stringify({version:1,exportDate:new Date().toISOString(),trips},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`viaggi-backup-${new Date().toISOString().slice(0,10)}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
-document.addEventListener('change',async e=>{if(e.target.id!=='backup-input')return;try{const json=JSON.parse(await e.target.files[0].text());if(!Array.isArray(json.trips))throw new Error('Formato backup non valido');if(!confirm(`Importare ${json.trips.length} viaggi dal backup? Verranno aggiornati quelli con lo stesso ID.`))return;const unique=new Map([...trips,...json.trips].map(t=>[t.id,t]));const merged=[...unique.values()];if(inCloud&&activeUser){for(let i=0;i<json.trips.length;i+=400){const batch=cloud.writeBatch(cloud.db);json.trips.slice(i,i+400).forEach(t=>batch.set(cloud.doc(cloud.db,'users',activeUser.uid,'trips',t.id),t));await batch.commit()}}else{trips=merged;setLocal();render()}toast('Backup importato')}catch(err){toast('Errore backup: '+err.message)}});
-initLocal();render();initFirebase();
+document.addEventListener('change',async e=>{
+ if(e.target.id!=='backup-input'||!activeUser||!inCloud)return;
+ try{
+   const raw=JSON.parse(await e.target.files[0].text());
+   const items=Array.isArray(raw)?raw:raw.trips;
+   if(!Array.isArray(items)||items.some(t=>!t||typeof t.id!=='string'||!Array.isArray(t.expenses)||!t.startDate))throw new Error('Formato JSON non valido');
+   if(!confirm(`Importare ${items.length} viaggi su Firebase? Quelli con lo stesso ID saranno aggiornati.`))return;
+   for(let i=0;i<items.length;i+=400){const batch=cloud.writeBatch(cloud.db);for(const t of items.slice(i,i+400))batch.set(cloud.doc(cloud.db,'users',activeUser.uid,'trips',t.id),t);await batch.commit()}
+   toast('Viaggi importati su Firebase!');
+ }catch(err){toast('Errore importazione: '+err.message)}
+ finally{e.target.value=''}
+});
+render();initFirebase();
