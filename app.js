@@ -194,7 +194,6 @@ function closeModal(){modal=null;render()}
 function actionHandler(action){const t=trips.find(t=>t.id===page.id);switch(action){case'home':goHome();break;case'world':worldFullscreen=false;page={screen:'world',year:null,id:null};render();window.scrollTo(0,0);break;case'world-expand':worldFullscreen=true;drawWorldMap();document.body.classList.add('map-open');break;case'world-close':worldFullscreen=false;document.body.classList.remove('map-open');drawWorldMap();break;case'toggle-amounts':amountsVisible=!amountsVisible;localStorage.setItem('viaggi-home-amounts',amountsVisible?'show':'hide');render();break;case'new':openModal('trip');break;case'close':closeModal();break;case'logout':logout();break;case'export':exportBackup();break;case'import-json':$('#backup-input')?.click();break;case'edit-trip':openModal('trip',t);break;case'add-expense':openModal('expense');break;case'expand-map':openModal('map');break;case'delete-trip':if(t&&confirm(`Eliminare definitivamente “${t.name}”?`)){removeTrip(t.id).then(goHome).catch(e=>toast(e.message))}break;case'delete-expense':if(t&&modal?.item&&confirm('Eliminare questa spesa?')){store({...t,expenses:t.expenses.filter(e=>e.id!==modal.item.id)}).then(closeModal).catch(e=>toast(e.message))}break;}}
 // Gesti sul DOM della mappa: i listener sono agganciati direttamente alla cartina
 // ad ogni ricostruzione. Questo evita che lo scorrimento del documento li intercetti.
-let mapWasDragged=false;
 function setupWorldTouchGestures(stage){
   const svg=stage?.querySelector('svg.vector-svg');
   if(!svg)return;
