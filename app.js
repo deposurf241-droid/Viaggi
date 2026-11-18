@@ -157,7 +157,7 @@ function drawMap(t){const target=modal?.type==='map'?document.querySelector('.sh
 }
 function worldPage(){return `<button class="back" data-action="home">← Torna al diario</button><section class="panel world-overview"><div class="world-intro"><div><div class="eyebrow">✧ Il passaporto di 3P ✧</div><h1>🌍 3P Map</h1><p class="muted">In oro i Paesi visitati. Tocca uno Stato per conoscerne il nome, apri la mappa grande per spostarti e ingrandire.</p></div><strong style="font-size:24px;color:#173c64" id="country-count"></strong></div><button class="btn primary world-expand-btn" data-action="world-expand">⛶ Apri mappa a schermo intero</button><div id="world-map" style="margin-top:15px"></div><div class="world-key"><span><i class="swatch" style="background:#d7a85e"></i>Visitato</span><span><i class="swatch" style="background:#e6dfca"></i>Da esplorare</span></div><section class="manual-countries"><h2>✚ Aggiungi un Paese visitato</h2><p class="muted">Anche senza viaggio o spese: scegli una nazione e la salvi nel tuo passaporto su Firebase.</p><form id="add-country-form" class="country-form"><label for="country-select">Paese</label><select id="country-select" name="country" required><option value="">Seleziona un Paese…</option>${worldGeo.features.filter(f=>f.properties.iso&&f.properties.iso!=='-99').sort((a,b)=>a.properties.name.localeCompare(b.properties.name,'it')).map(f=>`<option value="${esc(f.properties.iso)}">${esc(f.properties.name)}</option>`).join('')}</select><button class="btn primary" type="submit">+ Segna come visitato</button></form><p class="muted" style="font-size:12px">I Paesi aggiunti manualmente sono contrassegnati con ✕ e puoi rimuoverli dalla lista.</p></section><p class="muted country-denominator">Su 195 Stati del mondo (193 membri ONU + 2 osservatori). La mappa usa confini geografici semplificati.</p><h2>Paesi visitati</h2><div id="countries-list" class="country-tags"></div><p class="muted" style="font-size:12px">I Paesi sono ricavati dai viaggi e dalle aggiunte manuali. La cartografia è schematica, con confini semplificati.</p></section>`}
 function drawWorldMap(){const target=$('#world-map');if(!target)return;
- target.innerHTML=`<div class="world-map-stage${worldFullscreen?' fullscreen':''}">${worldFullscreen?'<div class="map-fullbar"><strong>🌍 3P Map · Trascina con il dito per esplorare</strong><button type="button" class="btn" data-action="world-close">✕ Chiudi</button></div>':''}${mapSvg([],'world',true)}</div>`;
+  target.innerHTML=`<div class="world-map-stage${worldFullscreen?' fullscreen':''}" style="position:relative">${worldFullscreen?'<div class="map-fullbar"><strong>🌍 3P Map · Trascina con il dito per esplorare</strong><button type="button" class="btn" data-action="world-close">✕ Chiudi</button></div>':''}${mapSvg([],'world',true)}<div class="country-tap-label" role="status" aria-live="polite" style="display:none;position:absolute;bottom:65px;left:50%;transform:translateX(-50%);background:#173c64;color:#fff;border:1px solid #e8d7a8;border-radius:14px;padding:12px 18px;font:600 15px system-ui;box-shadow:0 8px 26px #0005;z-index:99999;pointer-events:none;text-align:center;white-space:nowrap;max-width:90%"></div></div>`;
  const visited=visitedCodes();const names=worldGeo.features.filter(f=>visited.has(f.properties.iso)).sort((a,b)=>a.properties.name.localeCompare(b.properties.name,'it'));
  const counter=$('#country-count');if(counter)counter.textContent=names.length+' / 195 Paesi';
  setupWorldTouchGestures(target.querySelector('.world-map-stage'));
@@ -201,7 +201,32 @@ function setupWorldTouchGestures(stage){
   const currentView=()=> (worldViews.world||[0,0,1000,500]).slice();
   const distance=(a,b)=>Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);
   const midpoint=(a,b)=>({x:(a.clientX+b.clientX)/2,y:(a.clientY+b.clientY)/2});
-  let previous=null,dragged=false,down=null;
+   let previous=null,dragged=false,down=null;
+   // Identify the actual SVG polygon under the finger even when Safari
+   // sends the touch event to the <svg> rather than to its child <path>.
+   function countryAt(x,y,startingElement){
+     const direct=startingElement?.closest?.('[data-country]');
+     if(direct?.dataset.country)return direct.dataset.country;
+     const matrix=svg.getScreenCTM();
+     if(!matrix)return null;
+     let p;
+     try{p=svg.createSVGPoint();p.x=x;p.y=y;p=p.matrixTransform(matrix.inverse());}catch(_){return null;}
+     const paths=svg.querySelectorAll('path[data-country]');
+     for(let i=paths.length-1;i>=0;i--){
+       const path=paths[i];
+       try{if(path.isPointInFill(p))return path.dataset.country;}catch(_){}
+     }
+     return null;
+   }
+   function showCountry(iso){
+     const feature=worldGeo?.features.find(f=>f.properties.iso===iso);
+     if(!feature)return false;
+     const label=stage.querySelector('.country-tap-label');
+     if(!label)return false;
+     label.textContent='📍 '+feature.properties.name+(visitedCodes().has(iso)?' · Visitato ✓':' · Da esplorare');
+     label.style.display='block';
+     return true;
+   }
   function setView(v){
     worldViews.world=v;
     svg.setAttribute('viewBox',v.map(x=>x.toFixed(3)).join(' '));
@@ -221,7 +246,7 @@ function setupWorldTouchGestures(stage){
     if(e.cancelable)e.preventDefault();
     if(!e.touches.length)return;
     previous=snapshot(e.touches);
-    if(e.touches.length===1){dragged=false;down={x:e.touches[0].clientX,y:e.touches[0].clientY,country:e.target.closest('[data-country]')?.dataset.country||null};}
+    if(e.touches.length===1){dragged=false;down={x:e.touches[0].clientX,y:e.touches[0].clientY,country:countryAt(e.touches[0].clientX,e.touches[0].clientY,e.target)};}
     else{dragged=true;down=null;}
   },{passive:false});
   svg.addEventListener('touchmove',e=>{
@@ -291,7 +316,7 @@ function setupWorldTouchGestures(stage){
   svg.addEventListener('pointercancel',()=>{mouse=null;});
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&worldFullscreen){worldFullscreen=false;document.body.classList.remove('map-open');drawWorldMap()}});
-document.addEventListener('click',e=>{if(!activeUser)return;if(mapWasDragged&&e.target.closest('.world-map-stage'))return;const remove=e.target.closest('[data-remove-country]');if(remove){updateManualCountry(remove.dataset.removeCountry,false).catch(err=>toast(err.message));return}const zoom=e.target.closest('[data-map-zoom]');if(zoom){changeMapZoom(zoom.dataset.mapKey,zoom.dataset.mapZoom);return}const country=e.target.closest('[data-country]');if(country&&page.screen==='world'){const f=worldGeo?.features.find(f=>f.properties.iso===country.dataset.country);if(f)toast(f.properties.name+(visitedCodes().has(f.properties.iso)?' · visitato':' · da esplorare'));return}const worldStage=e.target.closest('.world-map-stage');if(worldStage&&page.screen==='world'&&!worldFullscreen&&!e.target.closest('[data-map-zoom]')&&!mapWasDragged){actionHandler('world-expand');return}const expense=e.target.closest('[data-expense]');if(expense){const t=trips.find(t=>t.id===page.id);openModal('expense',t?.expenses.find(x=>x.id===expense.dataset.expense));return}const trip=e.target.closest('[data-trip]');if(trip){selectTrip(trip.dataset.trip);return}const year=e.target.closest('[data-year]');if(year){selectYear(Number(year.dataset.year));return}const act=e.target.closest('[data-action]');if(act)actionHandler(act.dataset.action)});
+document.addEventListener('click',e=>{if(!activeUser)return;if(mapWasDragged&&e.target.closest('.world-map-stage'))return;const remove=e.target.closest('[data-remove-country]');if(remove){updateManualCountry(remove.dataset.removeCountry,false).catch(err=>toast(err.message));return}const zoom=e.target.closest('[data-map-zoom]');if(zoom){changeMapZoom(zoom.dataset.mapKey,zoom.dataset.mapZoom);return}const country=e.target.closest('[data-country]');if(country&&page.screen==='world'){const f=worldGeo?.features.find(f=>f.properties.iso===country.dataset.country);if(f){const label=e.target.closest('.world-map-stage')?.querySelector('.country-tap-label');if(label){label.textContent='📍 '+f.properties.name+(visitedCodes().has(f.properties.iso)?' · Visitato ✓':' · Da esplorare');label.style.display='block'}}return}const worldStage=e.target.closest('.world-map-stage');if(worldStage&&page.screen==='world'&&!worldFullscreen&&!e.target.closest('[data-map-zoom]')&&!mapWasDragged){actionHandler('world-expand');return}const expense=e.target.closest('[data-expense]');if(expense){const t=trips.find(t=>t.id===page.id);openModal('expense',t?.expenses.find(x=>x.id===expense.dataset.expense));return}const trip=e.target.closest('[data-trip]');if(trip){selectTrip(trip.dataset.trip);return}const year=e.target.closest('[data-year]');if(year){selectYear(Number(year.dataset.year));return}const act=e.target.closest('[data-action]');if(act)actionHandler(act.dataset.action)});
 document.addEventListener('submit',async e=>{
  if(e.target.id==='login-form'){
    e.preventDefault();const form=e.target;const btn=form.querySelector('button[type=submit]');btn.disabled=true;
