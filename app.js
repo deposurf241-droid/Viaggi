@@ -191,12 +191,76 @@ function modalHtml(){
 function openModal(type,item=null){modal={type,item};render()}
 function closeModal(){modal=null;render()}
 function actionHandler(action){const t=trips.find(t=>t.id===page.id);switch(action){case'home':goHome();break;case'world':worldFullscreen=false;page={screen:'world',year:null,id:null};render();window.scrollTo(0,0);break;case'world-expand':worldFullscreen=true;drawWorldMap();document.body.classList.add('map-open');break;case'world-close':worldFullscreen=false;document.body.classList.remove('map-open');drawWorldMap();break;case'toggle-amounts':amountsVisible=!amountsVisible;localStorage.setItem('viaggi-home-amounts',amountsVisible?'show':'hide');render();break;case'new':openModal('trip');break;case'close':closeModal();break;case'logout':logout();break;case'export':exportBackup();break;case'import-json':$('#backup-input')?.click();break;case'edit-trip':openModal('trip',t);break;case'add-expense':openModal('expense');break;case'expand-map':openModal('map');break;case'delete-trip':if(t&&confirm(`Eliminare definitivamente “${t.name}”?`)){removeTrip(t.id).then(goHome).catch(e=>toast(e.message))}break;case'delete-expense':if(t&&modal?.item&&confirm('Eliminare questa spesa?')){store({...t,expenses:t.expenses.filter(e=>e.id!==modal.item.id)}).then(closeModal).catch(e=>toast(e.message))}break;}}
-document.addEventListener('pointerdown',e=>{const wrapper=e.target.closest('.world-map-stage .vector-wrap');if(!wrapper||!activeUser||page.screen!=='world'||e.target.closest('button'))return;
- mapDrag={id:e.pointerId,x:e.clientX,y:e.clientY,wrapper};mapWasDragged=false;wrapper.setPointerCapture?.(e.pointerId);
+// 3P Map: gesti iPhone / iPad (un dito = trascina, due dita = pinch-to-zoom).
+// Touch events dedicati evitano che Safari interpreti il gesto come zoom della pagina.
+let mapTouches = null;
+const mapTouchWrapper = event => event.target.closest?.('.world-map-stage .vector-wrap');
+const touchPoints = list => Array.from(list).map(p => ({x:p.clientX,y:p.clientY}));
+const gestureCenter = points => ({x:points.reduce((s,p)=>s+p.x,0)/points.length,y:points.reduce((s,p)=>s+p.y,0)/points.length});
+const gestureDistance = points => points.length>1?Math.hypot(points[0].x-points[1].x,points[0].y-points[1].y):0;
+function moveAndScaleWorld(wrapper, oldCenter, newCenter, zoomFactor=1){
+  const svg=wrapper.querySelector('.vector-svg');if(!svg)return;
+  const r=svg.getBoundingClientRect();if(!r.width||!r.height)return;
+  const v=(worldViews.world||[0,0,1000,500]).slice();
+  // Ancora il punto tra le dita: zoom e trascinamento nello stesso movimento.
+  const ratioX=(oldCenter.x-r.left)/r.width,ratioY=(oldCenter.y-r.top)/r.height;
+  const w=Math.max(24,Math.min(1000,v[2]*zoomFactor));
+  const h=Math.max(12,Math.min(500,v[3]*zoomFactor));
+  const anchorX=v[0]+ratioX*v[2],anchorY=v[1]+ratioY*v[3];
+  const newRX=(newCenter.x-r.left)/r.width,newRY=(newCenter.y-r.top)/r.height;
+  const x=Math.max(0,Math.min(1000-w,anchorX-newRX*w));
+  const y=Math.max(0,Math.min(500-h,anchorY-newRY*h));
+  worldViews.world=[x,y,w,h];
+  svg.setAttribute('viewBox',worldViews.world.map(n=>n.toFixed(2)).join(' '));
+}
+document.addEventListener('touchstart',e=>{
+  const wrapper=mapTouchWrapper(e);
+  if(!wrapper||!activeUser||page.screen!=='world'||e.target.closest('button'))return;
+  if(e.cancelable)e.preventDefault();
+  const pts=touchPoints(e.touches);
+  if(!pts.length)return;
+  mapTouches={wrapper,center:gestureCenter(pts),distance:gestureDistance(pts),count:pts.length};
+},{passive:false});
+document.addEventListener('touchmove',e=>{
+  if(!mapTouches||!mapTouches.wrapper.isConnected||page.screen!=='world')return;
+  if(e.cancelable)e.preventDefault();
+  const pts=touchPoints(e.touches);if(!pts.length)return;
+  const center=gestureCenter(pts),distance=gestureDistance(pts);
+  if(pts.length!==mapTouches.count){
+    mapTouches.center=center;mapTouches.distance=distance;mapTouches.count=pts.length;
+    return;
+  }
+  const scale=pts.length>=2&&distance>0&&mapTouches.distance>0?mapTouches.distance/distance:1;
+  if(Math.abs(center.x-mapTouches.center.x)+Math.abs(center.y-mapTouches.center.y)>1||Math.abs(scale-1)>.002){
+    mapWasDragged=true;
+    moveAndScaleWorld(mapTouches.wrapper,mapTouches.center,center,scale);
+  }
+  mapTouches.center=center;mapTouches.distance=distance;
+},{passive:false});
+function finishMapTouch(e){
+  if(!mapTouches)return;
+  const pts=touchPoints(e.touches||[]);
+  if(!pts.length){mapTouches=null;if(mapWasDragged)setTimeout(()=>{mapWasDragged=false},400)}
+  else {mapTouches.center=gestureCenter(pts);mapTouches.distance=gestureDistance(pts);mapTouches.count=pts.length;}
+}
+document.addEventListener('touchend',finishMapTouch,{passive:true});
+document.addEventListener('touchcancel',finishMapTouch,{passive:true});
+// Mouse/pen: mantieni il trascinamento su desktop senza interferire con i tocchi.
+document.addEventListener('pointerdown',e=>{
+  if(e.pointerType==='touch')return;
+  const wrapper=mapTouchWrapper(e);
+  if(!wrapper||!activeUser||page.screen!=='world'||e.target.closest('button'))return;
+  mapDrag={id:e.pointerId,x:e.clientX,y:e.clientY,wrapper};mapWasDragged=false;
+  wrapper.setPointerCapture?.(e.pointerId);
 });
-document.addEventListener('pointermove',e=>{if(!mapDrag||mapDrag.id!==e.pointerId)return;const dx=e.clientX-mapDrag.x,dy=e.clientY-mapDrag.y;if(Math.abs(dx)+Math.abs(dy)>2){mapWasDragged=true;panMapView('world',dx,dy,mapDrag.wrapper)}mapDrag.x=e.clientX;mapDrag.y=e.clientY;});
-document.addEventListener('pointerup',e=>{if(mapDrag?.id===e.pointerId){mapDrag=null;if(mapWasDragged)setTimeout(()=>{mapWasDragged=false},100)}});
-document.addEventListener('pointercancel',()=>{mapDrag=null;mapWasDragged=false});
+document.addEventListener('pointermove',e=>{
+  if(!mapDrag||mapDrag.id!==e.pointerId)return;
+  const dx=e.clientX-mapDrag.x,dy=e.clientY-mapDrag.y;
+  if(Math.abs(dx)+Math.abs(dy)>1){mapWasDragged=true;panMapView('world',dx,dy,mapDrag.wrapper)}
+  mapDrag.x=e.clientX;mapDrag.y=e.clientY;
+});
+document.addEventListener('pointerup',e=>{if(mapDrag?.id===e.pointerId){mapDrag=null;if(mapWasDragged)setTimeout(()=>{mapWasDragged=false},400)}});
+document.addEventListener('pointercancel',()=>{mapDrag=null});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&worldFullscreen){worldFullscreen=false;document.body.classList.remove('map-open');drawWorldMap()}});
 document.addEventListener('click',e=>{if(!activeUser)return;if(mapWasDragged&&e.target.closest('.world-map-stage'))return;const remove=e.target.closest('[data-remove-country]');if(remove){updateManualCountry(remove.dataset.removeCountry,false).catch(err=>toast(err.message));return}const zoom=e.target.closest('[data-map-zoom]');if(zoom){changeMapZoom(zoom.dataset.mapKey,zoom.dataset.mapZoom);return}const worldStage=e.target.closest('.world-map-stage');if(worldStage&&page.screen==='world'&&!worldFullscreen&&!e.target.closest('[data-map-zoom]')){actionHandler('world-expand');return}const country=e.target.closest('[data-country]');if(country&&page.screen==='world'){const f=worldGeo?.features.find(f=>f.properties.iso===country.dataset.country);if(f)toast(f.properties.name+(visitedCodes().has(f.properties.iso)?' · visitato':' · da esplorare'));return}const expense=e.target.closest('[data-expense]');if(expense){const t=trips.find(t=>t.id===page.id);openModal('expense',t?.expenses.find(x=>x.id===expense.dataset.expense));return}const trip=e.target.closest('[data-trip]');if(trip){selectTrip(trip.dataset.trip);return}const year=e.target.closest('[data-year]');if(year){selectYear(Number(year.dataset.year));return}const act=e.target.closest('[data-action]');if(act)actionHandler(act.dataset.action)});
 document.addEventListener('submit',async e=>{
