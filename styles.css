@@ -54,3 +54,8 @@ body.map-open{overflow:hidden;}
 .world-map-stage .vector-svg,
 .world-map-stage .vector-svg * {touch-action:none!important;-webkit-user-select:none;user-select:none;}
 .world-map-stage.fullscreen {overscroll-behavior:contain;}
+
+/* Gestione pinch nativa direttamente sulla superficie SVG della mappa */
+.world-map-stage .vector-wrap,.world-map-stage svg.vector-svg,.world-map-stage svg.vector-svg *{touch-action:none!important;-webkit-touch-callout:none!important;overscroll-behavior:contain!important;}
+.world-map-stage svg.vector-svg{display:block;pointer-events:auto;}
+.country-denominator{font-size:12px;line-height:1.5;margin:8px 0 18px;}

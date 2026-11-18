@@ -155,11 +155,12 @@ function mapSvg(points,key,world=false){
 function drawMap(t){const target=modal?.type==='map'?document.querySelector('.sheet #map'):document.querySelector('main #map');if(!target)return;
  const points=tripPoints(t);target.innerHTML=mapSvg(points,'trip-'+t.id,false)+(points.length?'':'<p class="map-message">📍 Per mostrare le tappe, modifica il viaggio e aggiungi la destinazione o le località.</p>');
 }
-function worldPage(){return `<button class="back" data-action="home">← Torna al diario</button><section class="panel world-overview"><div class="world-intro"><div><div class="eyebrow">✧ Il passaporto di 3P ✧</div><h1>🌍 3P Map</h1><p class="muted">In oro i Paesi visitati. Tocca uno Stato per conoscerne il nome, apri la mappa grande per spostarti e ingrandire.</p></div><strong style="font-size:24px;color:#173c64" id="country-count"></strong></div><button class="btn primary world-expand-btn" data-action="world-expand">⛶ Apri mappa a schermo intero</button><div id="world-map" style="margin-top:15px"></div><div class="world-key"><span><i class="swatch" style="background:#d7a85e"></i>Visitato</span><span><i class="swatch" style="background:#e6dfca"></i>Da esplorare</span></div><section class="manual-countries"><h2>✚ Aggiungi un Paese visitato</h2><p class="muted">Anche senza viaggio o spese: scegli una nazione e la salvi nel tuo passaporto su Firebase.</p><form id="add-country-form" class="country-form"><label for="country-select">Paese</label><select id="country-select" name="country" required><option value="">Seleziona un Paese…</option>${worldGeo.features.filter(f=>f.properties.iso&&f.properties.iso!=='-99').sort((a,b)=>a.properties.name.localeCompare(b.properties.name,'it')).map(f=>`<option value="${esc(f.properties.iso)}">${esc(f.properties.name)}</option>`).join('')}</select><button class="btn primary" type="submit">+ Segna come visitato</button></form><p class="muted" style="font-size:12px">I Paesi aggiunti manualmente sono contrassegnati con ✕ e puoi rimuoverli dalla lista.</p></section><h2>Paesi visitati</h2><div id="countries-list" class="country-tags"></div><p class="muted" style="font-size:12px">I Paesi sono ricavati dai viaggi e dalle aggiunte manuali. La cartografia è schematica, con confini semplificati.</p></section>`}
+function worldPage(){return `<button class="back" data-action="home">← Torna al diario</button><section class="panel world-overview"><div class="world-intro"><div><div class="eyebrow">✧ Il passaporto di 3P ✧</div><h1>🌍 3P Map</h1><p class="muted">In oro i Paesi visitati. Tocca uno Stato per conoscerne il nome, apri la mappa grande per spostarti e ingrandire.</p></div><strong style="font-size:24px;color:#173c64" id="country-count"></strong></div><button class="btn primary world-expand-btn" data-action="world-expand">⛶ Apri mappa a schermo intero</button><div id="world-map" style="margin-top:15px"></div><div class="world-key"><span><i class="swatch" style="background:#d7a85e"></i>Visitato</span><span><i class="swatch" style="background:#e6dfca"></i>Da esplorare</span></div><section class="manual-countries"><h2>✚ Aggiungi un Paese visitato</h2><p class="muted">Anche senza viaggio o spese: scegli una nazione e la salvi nel tuo passaporto su Firebase.</p><form id="add-country-form" class="country-form"><label for="country-select">Paese</label><select id="country-select" name="country" required><option value="">Seleziona un Paese…</option>${worldGeo.features.filter(f=>f.properties.iso&&f.properties.iso!=='-99').sort((a,b)=>a.properties.name.localeCompare(b.properties.name,'it')).map(f=>`<option value="${esc(f.properties.iso)}">${esc(f.properties.name)}</option>`).join('')}</select><button class="btn primary" type="submit">+ Segna come visitato</button></form><p class="muted" style="font-size:12px">I Paesi aggiunti manualmente sono contrassegnati con ✕ e puoi rimuoverli dalla lista.</p></section><p class="muted country-denominator">Su 195 Stati del mondo (193 membri ONU + 2 osservatori). La mappa usa confini geografici semplificati.</p><h2>Paesi visitati</h2><div id="countries-list" class="country-tags"></div><p class="muted" style="font-size:12px">I Paesi sono ricavati dai viaggi e dalle aggiunte manuali. La cartografia è schematica, con confini semplificati.</p></section>`}
 function drawWorldMap(){const target=$('#world-map');if(!target)return;
  target.innerHTML=`<div class="world-map-stage${worldFullscreen?' fullscreen':''}">${worldFullscreen?'<div class="map-fullbar"><strong>🌍 3P Map · Trascina con il dito per esplorare</strong><button type="button" class="btn" data-action="world-close">✕ Chiudi</button></div>':''}${mapSvg([],'world',true)}</div>`;
  const visited=visitedCodes();const names=worldGeo.features.filter(f=>visited.has(f.properties.iso)).sort((a,b)=>a.properties.name.localeCompare(b.properties.name,'it'));
- const counter=$('#country-count');if(counter)counter.textContent=names.length+' Paesi';
+ const counter=$('#country-count');if(counter)counter.textContent=names.length+' / 195 Paesi';
+ setupWorldTouchGestures(target.querySelector('.world-map-stage'));
  const listing=$('#countries-list');if(listing)listing.innerHTML=names.map(f=>{const manual=manualVisited.includes(f.properties.iso);return `<span class="country-tag">✓ ${esc(f.properties.name)}${manual?` <button class="country-remove" type="button" data-remove-country="${esc(f.properties.iso)}" aria-label="Rimuovi ${esc(f.properties.name)}">✕</button>`:''}</span>`}).join('')||'Nessun Paese ancora';
 }
 async function updateManualCountry(iso,add){if(!activeUser||!cloud)throw new Error('Accedi prima di modificare i Paesi');
@@ -191,78 +192,98 @@ function modalHtml(){
 function openModal(type,item=null){modal={type,item};render()}
 function closeModal(){modal=null;render()}
 function actionHandler(action){const t=trips.find(t=>t.id===page.id);switch(action){case'home':goHome();break;case'world':worldFullscreen=false;page={screen:'world',year:null,id:null};render();window.scrollTo(0,0);break;case'world-expand':worldFullscreen=true;drawWorldMap();document.body.classList.add('map-open');break;case'world-close':worldFullscreen=false;document.body.classList.remove('map-open');drawWorldMap();break;case'toggle-amounts':amountsVisible=!amountsVisible;localStorage.setItem('viaggi-home-amounts',amountsVisible?'show':'hide');render();break;case'new':openModal('trip');break;case'close':closeModal();break;case'logout':logout();break;case'export':exportBackup();break;case'import-json':$('#backup-input')?.click();break;case'edit-trip':openModal('trip',t);break;case'add-expense':openModal('expense');break;case'expand-map':openModal('map');break;case'delete-trip':if(t&&confirm(`Eliminare definitivamente “${t.name}”?`)){removeTrip(t.id).then(goHome).catch(e=>toast(e.message))}break;case'delete-expense':if(t&&modal?.item&&confirm('Eliminare questa spesa?')){store({...t,expenses:t.expenses.filter(e=>e.id!==modal.item.id)}).then(closeModal).catch(e=>toast(e.message))}break;}}
-// 3P Map: gesti iPhone / iPad (un dito = trascina, due dita = pinch-to-zoom).
-// Touch events dedicati evitano che Safari interpreti il gesto come zoom della pagina.
-let mapTouches = null;
-const mapTouchWrapper = event => event.target.closest?.('.world-map-stage .vector-wrap');
-const touchPoints = list => Array.from(list).map(p => ({x:p.clientX,y:p.clientY}));
-const gestureCenter = points => ({x:points.reduce((s,p)=>s+p.x,0)/points.length,y:points.reduce((s,p)=>s+p.y,0)/points.length});
-const gestureDistance = points => points.length>1?Math.hypot(points[0].x-points[1].x,points[0].y-points[1].y):0;
-function moveAndScaleWorld(wrapper, oldCenter, newCenter, zoomFactor=1){
-  const svg=wrapper.querySelector('.vector-svg');if(!svg)return;
-  const r=svg.getBoundingClientRect();if(!r.width||!r.height)return;
-  const v=(worldViews.world||[0,0,1000,500]).slice();
-  // Ancora il punto tra le dita: zoom e trascinamento nello stesso movimento.
-  const ratioX=(oldCenter.x-r.left)/r.width,ratioY=(oldCenter.y-r.top)/r.height;
-  const w=Math.max(24,Math.min(1000,v[2]*zoomFactor));
-  const h=Math.max(12,Math.min(500,v[3]*zoomFactor));
-  const anchorX=v[0]+ratioX*v[2],anchorY=v[1]+ratioY*v[3];
-  const newRX=(newCenter.x-r.left)/r.width,newRY=(newCenter.y-r.top)/r.height;
-  const x=Math.max(0,Math.min(1000-w,anchorX-newRX*w));
-  const y=Math.max(0,Math.min(500-h,anchorY-newRY*h));
-  worldViews.world=[x,y,w,h];
-  svg.setAttribute('viewBox',worldViews.world.map(n=>n.toFixed(2)).join(' '));
-}
-document.addEventListener('touchstart',e=>{
-  const wrapper=mapTouchWrapper(e);
-  if(!wrapper||!activeUser||page.screen!=='world'||e.target.closest('button'))return;
-  if(e.cancelable)e.preventDefault();
-  const pts=touchPoints(e.touches);
-  if(!pts.length)return;
-  mapTouches={wrapper,center:gestureCenter(pts),distance:gestureDistance(pts),count:pts.length};
-},{passive:false});
-document.addEventListener('touchmove',e=>{
-  if(!mapTouches||!mapTouches.wrapper.isConnected||page.screen!=='world')return;
-  if(e.cancelable)e.preventDefault();
-  const pts=touchPoints(e.touches);if(!pts.length)return;
-  const center=gestureCenter(pts),distance=gestureDistance(pts);
-  if(pts.length!==mapTouches.count){
-    mapTouches.center=center;mapTouches.distance=distance;mapTouches.count=pts.length;
-    return;
+// Gesti sul DOM della mappa: i listener sono agganciati direttamente alla cartina
+// ad ogni ricostruzione. Questo evita che lo scorrimento del documento li intercetti.
+let mapWasDragged=false;
+function setupWorldTouchGestures(stage){
+  const svg=stage?.querySelector('svg.vector-svg');
+  if(!svg)return;
+  const snapshots=new Map();
+  let startDistance=0, startCenter=null, startView=null, originMoved=false;
+  const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
+  function midpoint(a,b){return {x:(a.x+b.x)/2,y:(a.y+b.y)/2}}
+  function distance(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
+  function apply(center, distanceNow){
+    if(!startCenter||!startView)return;
+    const rect=svg.getBoundingClientRect();
+    if(rect.width<2||rect.height<2)return;
+    // Zoom uniforme attorno al centro delle due dita, pan fluido con un dito.
+    const factor=startDistance>0&&distanceNow>0?startDistance/distanceNow:1;
+    const width=clamp(startView[2]*factor,20,1000);
+    const height=clamp(startView[3]*factor,10,500);
+    const oldRelX=(startCenter.x-rect.left)/rect.width;
+    const oldRelY=(startCenter.y-rect.top)/rect.height;
+    const newRelX=(center.x-rect.left)/rect.width;
+    const newRelY=(center.y-rect.top)/rect.height;
+    const anchorX=startView[0]+oldRelX*startView[2];
+    const anchorY=startView[1]+oldRelY*startView[3];
+    const x=clamp(anchorX-newRelX*width,0,1000-width);
+    const y=clamp(anchorY-newRelY*height,0,500-height);
+    worldViews.world=[x,y,width,height];
+    svg.setAttribute('viewBox',worldViews.world.map(v=>v.toFixed(3)).join(' '));
   }
-  const scale=pts.length>=2&&distance>0&&mapTouches.distance>0?mapTouches.distance/distance:1;
-  if(Math.abs(center.x-mapTouches.center.x)+Math.abs(center.y-mapTouches.center.y)>1||Math.abs(scale-1)>.002){
-    mapWasDragged=true;
-    moveAndScaleWorld(mapTouches.wrapper,mapTouches.center,center,scale);
+  function setBase(points){
+    if(!points.length){startCenter=null;return}
+    startCenter=points.length>=2?midpoint(points[0],points[1]):points[0];
+    startDistance=points.length>=2?distance(points[0],points[1]):0;
+    startView=(worldViews.world||[0,0,1000,500]).slice();
   }
-  mapTouches.center=center;mapTouches.distance=distance;
-},{passive:false});
-function finishMapTouch(e){
-  if(!mapTouches)return;
-  const pts=touchPoints(e.touches||[]);
-  if(!pts.length){mapTouches=null;if(mapWasDragged)setTimeout(()=>{mapWasDragged=false},400)}
-  else {mapTouches.center=gestureCenter(pts);mapTouches.distance=gestureDistance(pts);mapTouches.count=pts.length;}
+  // iPhone/iPad: usare touchstart/touchmove sul SVG, non sul documento.
+  let touches=[];
+  svg.addEventListener('touchstart',event=>{
+    if(event.cancelable)event.preventDefault();
+    touches=Array.from(event.touches).map(t=>({x:t.clientX,y:t.clientY}));
+    setBase(touches);originMoved=false;
+  },{passive:false,capture:true});
+  svg.addEventListener('touchmove',event=>{
+    if(event.cancelable)event.preventDefault();
+    const curr=Array.from(event.touches).map(t=>({x:t.clientX,y:t.clientY}));
+    if(!curr.length)return;
+    if(curr.length!==touches.length){touches=curr;setBase(curr);return;}
+    const center=curr.length>=2?midpoint(curr[0],curr[1]):curr[0];
+    const dist=curr.length>=2?distance(curr[0],curr[1]):0;
+    if(startCenter&&(Math.abs(center.x-startCenter.x)>2||Math.abs(center.y-startCenter.y)>2||Math.abs(dist-startDistance)>3)){
+      mapWasDragged=true;originMoved=true;apply(center,dist);
+    }
+  },{passive:false,capture:true});
+  const finishTouch=event=>{
+    if(event.cancelable&&event.touches?.length)event.preventDefault();
+    touches=Array.from(event.touches||[]).map(t=>({x:t.clientX,y:t.clientY}));
+    setBase(touches);
+    if(!touches.length&&originMoved){setTimeout(()=>{mapWasDragged=false},500)}
+  };
+  svg.addEventListener('touchend',finishTouch,{passive:false,capture:true});
+  svg.addEventListener('touchcancel',finishTouch,{passive:false,capture:true});
+  // Safari talvolta invia un gesture event invece dei due tocchi standard.
+  let gestureBase=null;
+  svg.addEventListener('gesturestart',event=>{
+    event.preventDefault();gestureBase={scale:1,view:(worldViews.world||[0,0,1000,500]).slice(),x:event.clientX,y:event.clientY};
+  },{passive:false});
+  svg.addEventListener('gesturechange',event=>{
+    if(!gestureBase)return;
+    event.preventDefault();mapWasDragged=true;
+    startView=gestureBase.view;startCenter={x:gestureBase.x,y:gestureBase.y};startDistance=1;
+    apply({x:event.clientX,y:event.clientY},event.scale);
+  },{passive:false});
+  svg.addEventListener('gestureend',event=>{event.preventDefault();gestureBase=null;setTimeout(()=>{mapWasDragged=false},500)},{passive:false});
+  // Desktop: trascina con mouse (gli eventi touch sono gestiti separatamente).
+  let mouse=null;
+  svg.addEventListener('pointerdown',event=>{
+    if(event.pointerType==='touch')return;
+    mouse={x:event.clientX,y:event.clientY};
+    svg.setPointerCapture?.(event.pointerId);
+  });
+  svg.addEventListener('pointermove',event=>{
+    if(!mouse)return;
+    const dx=event.clientX-mouse.x,dy=event.clientY-mouse.y;
+    if(Math.abs(dx)+Math.abs(dy)>1){mapWasDragged=true;panMapView('world',dx,dy,svg.parentElement)}
+    mouse={x:event.clientX,y:event.clientY};
+  });
+  svg.addEventListener('pointerup',()=>{mouse=null;setTimeout(()=>{mapWasDragged=false},400)});
+  svg.addEventListener('pointercancel',()=>{mouse=null});
 }
-document.addEventListener('touchend',finishMapTouch,{passive:true});
-document.addEventListener('touchcancel',finishMapTouch,{passive:true});
-// Mouse/pen: mantieni il trascinamento su desktop senza interferire con i tocchi.
-document.addEventListener('pointerdown',e=>{
-  if(e.pointerType==='touch')return;
-  const wrapper=mapTouchWrapper(e);
-  if(!wrapper||!activeUser||page.screen!=='world'||e.target.closest('button'))return;
-  mapDrag={id:e.pointerId,x:e.clientX,y:e.clientY,wrapper};mapWasDragged=false;
-  wrapper.setPointerCapture?.(e.pointerId);
-});
-document.addEventListener('pointermove',e=>{
-  if(!mapDrag||mapDrag.id!==e.pointerId)return;
-  const dx=e.clientX-mapDrag.x,dy=e.clientY-mapDrag.y;
-  if(Math.abs(dx)+Math.abs(dy)>1){mapWasDragged=true;panMapView('world',dx,dy,mapDrag.wrapper)}
-  mapDrag.x=e.clientX;mapDrag.y=e.clientY;
-});
-document.addEventListener('pointerup',e=>{if(mapDrag?.id===e.pointerId){mapDrag=null;if(mapWasDragged)setTimeout(()=>{mapWasDragged=false},400)}});
-document.addEventListener('pointercancel',()=>{mapDrag=null});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&worldFullscreen){worldFullscreen=false;document.body.classList.remove('map-open');drawWorldMap()}});
-document.addEventListener('click',e=>{if(!activeUser)return;if(mapWasDragged&&e.target.closest('.world-map-stage'))return;const remove=e.target.closest('[data-remove-country]');if(remove){updateManualCountry(remove.dataset.removeCountry,false).catch(err=>toast(err.message));return}const zoom=e.target.closest('[data-map-zoom]');if(zoom){changeMapZoom(zoom.dataset.mapKey,zoom.dataset.mapZoom);return}const worldStage=e.target.closest('.world-map-stage');if(worldStage&&page.screen==='world'&&!worldFullscreen&&!e.target.closest('[data-map-zoom]')){actionHandler('world-expand');return}const country=e.target.closest('[data-country]');if(country&&page.screen==='world'){const f=worldGeo?.features.find(f=>f.properties.iso===country.dataset.country);if(f)toast(f.properties.name+(visitedCodes().has(f.properties.iso)?' · visitato':' · da esplorare'));return}const expense=e.target.closest('[data-expense]');if(expense){const t=trips.find(t=>t.id===page.id);openModal('expense',t?.expenses.find(x=>x.id===expense.dataset.expense));return}const trip=e.target.closest('[data-trip]');if(trip){selectTrip(trip.dataset.trip);return}const year=e.target.closest('[data-year]');if(year){selectYear(Number(year.dataset.year));return}const act=e.target.closest('[data-action]');if(act)actionHandler(act.dataset.action)});
+document.addEventListener('click',e=>{if(!activeUser)return;if(mapWasDragged&&e.target.closest('.world-map-stage'))return;const remove=e.target.closest('[data-remove-country]');if(remove){updateManualCountry(remove.dataset.removeCountry,false).catch(err=>toast(err.message));return}const zoom=e.target.closest('[data-map-zoom]');if(zoom){changeMapZoom(zoom.dataset.mapKey,zoom.dataset.mapZoom);return}const worldStage=e.target.closest('.world-map-stage');if(worldStage&&page.screen==='world'&&!worldFullscreen&&!e.target.closest('[data-map-zoom]')&&!mapWasDragged){actionHandler('world-expand');return}const country=e.target.closest('[data-country]');if(country&&page.screen==='world'){const f=worldGeo?.features.find(f=>f.properties.iso===country.dataset.country);if(f)toast(f.properties.name+(visitedCodes().has(f.properties.iso)?' · visitato':' · da esplorare'));return}const expense=e.target.closest('[data-expense]');if(expense){const t=trips.find(t=>t.id===page.id);openModal('expense',t?.expenses.find(x=>x.id===expense.dataset.expense));return}const trip=e.target.closest('[data-trip]');if(trip){selectTrip(trip.dataset.trip);return}const year=e.target.closest('[data-year]');if(year){selectYear(Number(year.dataset.year));return}const act=e.target.closest('[data-action]');if(act)actionHandler(act.dataset.action)});
 document.addEventListener('submit',async e=>{
  if(e.target.id==='login-form'){
    e.preventDefault();const form=e.target;const btn=form.querySelector('button[type=submit]');btn.disabled=true;
