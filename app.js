@@ -197,90 +197,101 @@ function actionHandler(action){const t=trips.find(t=>t.id===page.id);switch(acti
 function setupWorldTouchGestures(stage){
   const svg=stage?.querySelector('svg.vector-svg');
   if(!svg)return;
-  const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
-  const baseView=()=> (worldViews.world||[0,0,1000,500]).slice();
-  const mid=(a,b)=>({x:(a.clientX+b.clientX)/2,y:(a.clientY+b.clientY)/2});
-  const dist=(a,b)=>Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);
-  let gesture=null, moved=false;
-  const saveView=view=>{
-    worldViews.world=view;
-    svg.setAttribute('viewBox',view.map(n=>n.toFixed(3)).join(' '));
-  };
-  function begin(touchList){
-    const t=Array.from(touchList);
-    if(!t.length){gesture=null;return;}
-    gesture={
-      count:Math.min(t.length,2),
-      center:t.length>=2?mid(t[0],t[1]):{x:t[0].clientX,y:t[0].clientY},
-      distance:t.length>=2?Math.max(12,dist(t[0],t[1])):0,
-      view:baseView()
-    };
+  const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+  const currentView=()=> (worldViews.world||[0,0,1000,500]).slice();
+  const distance=(a,b)=>Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);
+  const midpoint=(a,b)=>({x:(a.clientX+b.clientX)/2,y:(a.clientY+b.clientY)/2});
+  let previous=null,dragged=false,down=null;
+  function setView(v){
+    worldViews.world=v;
+    svg.setAttribute('viewBox',v.map(x=>x.toFixed(3)).join(' '));
   }
-  function update(touchList){
-    const t=Array.from(touchList);
-    if(!t.length)return;
-    const count=Math.min(t.length,2);
-    if(!gesture||gesture.count!==count){begin(t);return;}
-    const center=count===2?mid(t[0],t[1]):{x:t[0].clientX,y:t[0].clientY};
-    const rect=svg.getBoundingClientRect();
-    if(rect.width<10||rect.height<10)return;
-    let factor=1;
-    if(count===2){
-      const ratio=dist(t[0],t[1])/gesture.distance;
-      // Un solo flusso touch (niente gesturechange di Safari): sensibilità morbida.
-      // Consente sia di ingrandire sia di rimpicciolire senza salti improvvisi.
-      factor=clamp(Math.pow(Math.max(.1,ratio),-.60),1/1.65,1.65);
-    }
-    const old=gesture.view;
-    // Limiti uniformi: evita distorsioni e permette di tornare al mondo intero.
-    const sizeFactor=clamp(factor,125/old[2],1000/old[2]);
-    const newW=old[2]*sizeFactor,newH=old[3]*sizeFactor;
-    const oldX=clamp((gesture.center.x-rect.left)/rect.width,0,1);
-    const oldY=clamp((gesture.center.y-rect.top)/rect.height,0,1);
-    const newX=clamp((center.x-rect.left)/rect.width,0,1);
-    const newY=clamp((center.y-rect.top)/rect.height,0,1);
-    const anchorX=old[0]+oldX*old[2],anchorY=old[1]+oldY*old[3];
-    const next=[clamp(anchorX-newX*newW,0,1000-newW),clamp(anchorY-newY*newH,0,500-newH),newW,newH];
-    if(Math.abs(center.x-gesture.center.x)>3||Math.abs(center.y-gesture.center.y)>3||Math.abs(sizeFactor-1)>.015){
-      moved=true;mapWasDragged=true;
-    }
-    saveView(next);
+  function snapshot(touches){
+    if(touches.length>=2)return {count:2,center:midpoint(touches[0],touches[1]),distance:distance(touches[0],touches[1])};
+    if(touches.length===1)return {count:1,center:{x:touches[0].clientX,y:touches[0].clientY},distance:0};
+    return null;
   }
-  // Su iPhone Safari può inviare sia touchmove sia gesturechange per lo stesso pinch.
-  // Ascoltiamo SOLO touchmove per evitare che lo zoom venga moltiplicato due volte.
+  // Coordinate fisiche effettive della cartina (anche con preserveAspectRatio).
+  function viewport(){
+    const r=svg.getBoundingClientRect(),v=currentView();
+    const factor=Math.min(r.width/v[2],r.height/v[3]);
+    return {x:r.left+(r.width-v[2]*factor)/2,y:r.top+(r.height-v[3]*factor)/2,scale:factor};
+  }
   svg.addEventListener('touchstart',e=>{
     if(e.cancelable)e.preventDefault();
-    begin(e.touches);
-    moved=false;
+    if(!e.touches.length)return;
+    previous=snapshot(e.touches);
+    if(e.touches.length===1){dragged=false;down={x:e.touches[0].clientX,y:e.touches[0].clientY,country:e.target.closest('[data-country]')?.dataset.country||null};}
+    else{dragged=true;down=null;}
   },{passive:false});
   svg.addEventListener('touchmove',e=>{
     if(e.cancelable)e.preventDefault();
-    update(e.touches);
+    const now=snapshot(e.touches);
+    if(!now)return;
+    if(!previous||previous.count!==now.count){previous=now;return;}
+    const before=currentView();
+    const screen=viewport();
+    if(screen.scale<=0)return;
+    const dx=now.center.x-previous.center.x,dy=now.center.y-previous.center.y;
+    let next=before.slice();
+    if(now.count===2&&previous.distance>15&&now.distance>15){
+      // Rapporti incrementali e simmetrici: aprire = zoom in, chiudere = zoom out.
+      // Il limite PER EVENTO elimina i grandi scatti di Safari.
+      const ratio=clamp(previous.distance/now.distance,0.88,1.12);
+      const factor=Math.pow(ratio,0.85);
+      const width=clamp(before[2]*factor,125,1000);
+      const height=width/2;
+      const anchorX=before[0]+(previous.center.x-screen.x)/screen.scale;
+      const anchorY=before[1]+(previous.center.y-screen.y)/screen.scale;
+      const nextScale=screen.scale*(before[2]/width);
+      const newMapLeft=svg.getBoundingClientRect().left+(svg.getBoundingClientRect().width-width*nextScale)/2;
+      const newMapTop=svg.getBoundingClientRect().top+(svg.getBoundingClientRect().height-height*nextScale)/2;
+      next=[anchorX-(now.center.x-newMapLeft)/nextScale,anchorY-(now.center.y-newMapTop)/nextScale,width,height];
+    }else{
+      next[0]-=dx/screen.scale;
+      next[1]-=dy/screen.scale;
+    }
+    next[0]=clamp(next[0],0,1000-next[2]);
+    next[1]=clamp(next[1],0,500-next[3]);
+    if(Math.abs(dx)+Math.abs(dy)>2||(now.count===2&&Math.abs(now.distance-previous.distance)>2)){
+      dragged=true;mapWasDragged=true;
+    }
+    setView(next);
+    previous=now;
   },{passive:false});
-  const finish=e=>{
+  function endTouch(e){
     if(e.cancelable)e.preventDefault();
-    begin(e.touches);
-    if(!e.touches.length&&moved){setTimeout(()=>{mapWasDragged=false;},450);}
-  };
-  svg.addEventListener('touchend',finish,{passive:false});
-  svg.addEventListener('touchcancel',finish,{passive:false});
-  // Mouse desktop, indipendente dai gesti touch.
+    if(e.touches.length){previous=snapshot(e.touches);down=null;return;}
+    previous=null;
+    if(!dragged&&down){
+      // touchstart preventDefault blocca il click sintetico di Safari: gestiamo il tap qui.
+      if(down.country){
+        const country=worldGeo?.features.find(f=>f.properties.iso===down.country);
+        if(country)toast(country.properties.name+(visitedCodes().has(down.country)?' · visitato':' · da esplorare'));
+      }else if(!worldFullscreen&&page.screen==='world'){
+        actionHandler('world-expand');
+      }
+    }
+    down=null;
+    if(dragged){setTimeout(()=>{mapWasDragged=false;},350);}
+    dragged=false;
+  }
+  svg.addEventListener('touchend',endTouch,{passive:false});
+  svg.addEventListener('touchcancel',e=>{previous=null;down=null;dragged=false;setTimeout(()=>mapWasDragged=false,300);},{passive:false});
+  // Un solo sistema touch; nessun gesturechange o pointer touch in parallelo.
   let mouse=null;
-  svg.addEventListener('pointerdown',e=>{
-    if(e.pointerType==='touch')return;
-    mouse={x:e.clientX,y:e.clientY};svg.setPointerCapture?.(e.pointerId);
-  });
+  svg.addEventListener('pointerdown',e=>{if(e.pointerType==='touch')return;mouse={x:e.clientX,y:e.clientY};svg.setPointerCapture?.(e.pointerId);});
   svg.addEventListener('pointermove',e=>{
     if(!mouse)return;
     const dx=e.clientX-mouse.x,dy=e.clientY-mouse.y;
     if(Math.abs(dx)+Math.abs(dy)>1){mapWasDragged=true;panMapView('world',dx,dy,svg.parentElement);}
     mouse={x:e.clientX,y:e.clientY};
   });
-  svg.addEventListener('pointerup',()=>{mouse=null;setTimeout(()=>{mapWasDragged=false;},400);});
+  svg.addEventListener('pointerup',()=>{mouse=null;setTimeout(()=>mapWasDragged=false,350);});
   svg.addEventListener('pointercancel',()=>{mouse=null;});
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&worldFullscreen){worldFullscreen=false;document.body.classList.remove('map-open');drawWorldMap()}});
-document.addEventListener('click',e=>{if(!activeUser)return;if(mapWasDragged&&e.target.closest('.world-map-stage'))return;const remove=e.target.closest('[data-remove-country]');if(remove){updateManualCountry(remove.dataset.removeCountry,false).catch(err=>toast(err.message));return}const zoom=e.target.closest('[data-map-zoom]');if(zoom){changeMapZoom(zoom.dataset.mapKey,zoom.dataset.mapZoom);return}const worldStage=e.target.closest('.world-map-stage');if(worldStage&&page.screen==='world'&&!worldFullscreen&&!e.target.closest('[data-map-zoom]')&&!mapWasDragged){actionHandler('world-expand');return}const country=e.target.closest('[data-country]');if(country&&page.screen==='world'){const f=worldGeo?.features.find(f=>f.properties.iso===country.dataset.country);if(f)toast(f.properties.name+(visitedCodes().has(f.properties.iso)?' · visitato':' · da esplorare'));return}const expense=e.target.closest('[data-expense]');if(expense){const t=trips.find(t=>t.id===page.id);openModal('expense',t?.expenses.find(x=>x.id===expense.dataset.expense));return}const trip=e.target.closest('[data-trip]');if(trip){selectTrip(trip.dataset.trip);return}const year=e.target.closest('[data-year]');if(year){selectYear(Number(year.dataset.year));return}const act=e.target.closest('[data-action]');if(act)actionHandler(act.dataset.action)});
+document.addEventListener('click',e=>{if(!activeUser)return;if(mapWasDragged&&e.target.closest('.world-map-stage'))return;const remove=e.target.closest('[data-remove-country]');if(remove){updateManualCountry(remove.dataset.removeCountry,false).catch(err=>toast(err.message));return}const zoom=e.target.closest('[data-map-zoom]');if(zoom){changeMapZoom(zoom.dataset.mapKey,zoom.dataset.mapZoom);return}const country=e.target.closest('[data-country]');if(country&&page.screen==='world'){const f=worldGeo?.features.find(f=>f.properties.iso===country.dataset.country);if(f)toast(f.properties.name+(visitedCodes().has(f.properties.iso)?' · visitato':' · da esplorare'));return}const worldStage=e.target.closest('.world-map-stage');if(worldStage&&page.screen==='world'&&!worldFullscreen&&!e.target.closest('[data-map-zoom]')&&!mapWasDragged){actionHandler('world-expand');return}const expense=e.target.closest('[data-expense]');if(expense){const t=trips.find(t=>t.id===page.id);openModal('expense',t?.expenses.find(x=>x.id===expense.dataset.expense));return}const trip=e.target.closest('[data-trip]');if(trip){selectTrip(trip.dataset.trip);return}const year=e.target.closest('[data-year]');if(year){selectYear(Number(year.dataset.year));return}const act=e.target.closest('[data-action]');if(act)actionHandler(act.dataset.action)});
 document.addEventListener('submit',async e=>{
  if(e.target.id==='login-form'){
    e.preventDefault();const form=e.target;const btn=form.querySelector('button[type=submit]');btn.disabled=true;
