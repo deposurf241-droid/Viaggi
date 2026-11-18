@@ -14,6 +14,7 @@ const tripYear=t=>Number(t.startDate?.slice(0,4))||new Date().getFullYear();
 const num=v=>Number(String(v).replace(',','.'));
 let trips=[];let page={screen:'home',year:null,id:null};let modal=null;let chart=null;let map=null;let cloud=null;let activeUser=null;let unsubscribe=null;let inCloud=false;
 let authReady=false; let authError='';
+let worldGeo=null;let worldLoading=false;const worldViews={};
 // Preferenza del solo dispositivo: i dati restano sempre su Firebase.
 let amountsVisible = localStorage.getItem('viaggi-home-amounts') === 'show';
 const homeAmount = n => amountsVisible ? fmt(n) : '••••••';
@@ -68,64 +69,99 @@ function authScreen(){
 function render(){
   if(chart){chart.destroy();chart=null}if(map){map.remove();map=null}
   if(!activeUser){$('#app').innerHTML=authScreen();return}
-  let content=page.screen==='home'?home():page.screen==='year'?yearPage(page.year):tripPage(page.id);
+  let content=page.screen==='home'?home():page.screen==='year'?yearPage(page.year):page.screen==='world'?worldPage():tripPage(page.id);
   $('#app').innerHTML=`<div class="app-shell"><header class="topbar"><button class="brand" data-action="home"><img src="assets/icon.svg" alt=""><span><b>Viaggi</b><small>Around the World</small></span></button><div class="top-actions"><span class="pill">☁️ Privato</span><button class="btn ghost tiny" data-action="logout">Esci</button><button class="btn gold tiny" data-action="new">+ Viaggio</button></div></header><main class="main">${authError?`<p class="notice">${esc(authError)}</p>`:''}${content}</main><footer class="footer">✈️ Il tuo mondo, i tuoi viaggi, le tue spese · Firebase</footer></div>${modal?modalHtml():''}`;
-  if(page.screen==='trip'){const t=trips.find(t=>t.id===page.id);if(t){drawChart(t);drawMap(t)}}
+  if(page.screen==='trip'){const t=trips.find(t=>t.id===page.id);if(t){drawChart(t);drawMap(t)}}if(page.screen==='world')drawWorldMap()
 }
 function home(){
  const total=round(trips.reduce((a,t)=>a+sum(t),0));const ys=[...new Set(trips.map(tripYear))].sort((a,b)=>a-b);
- return `<section class="hero"><div class="eyebrow">✧ Colleziona momenti, non cose ✧</div><h1>Around the World</h1><p>Un diario personale di destinazioni, ricordi e spese. Ogni viaggio è una storia da conservare.</p></section><div class="stats"><div class="stat"><strong>${trips.length}</strong><small>Viaggi</small></div><div class="stat"><strong>${ys.length}</strong><small>Anni</small></div><div class="stat"><strong class="home-amount" aria-label="Totale ${amountsVisible?'visibile':'nascosto'}">${homeAmount(total)}</strong><small>Spesa totale</small></div></div><div class="section-head"><h2>Il tuo diario</h2><div class="inline-actions"><button class="btn privacy-toggle" data-action="toggle-amounts" title="${amountsVisible?'Nascondi i totali':'Mostra i totali'}" aria-label="${amountsVisible?'Nascondi i totali':'Mostra i totali'}" aria-pressed="${amountsVisible}">${amountsVisible?'👁️ Nascondi':'🙈 Mostra'}</button><button class="btn primary" data-action="new">+ Nuovo viaggio</button></div></div><div class="years">${ys.map(y=>{const list=trips.filter(t=>tripYear(t)===y);return `<button class="year-card" data-year="${y}"><div class="year">${y} ✧</div><div class="foot"><small>${list.length} ${list.length===1?'viaggio':'viaggi'}</small><strong class="home-amount">${homeAmount(list.reduce((a,t)=>a+sum(t),0))}</strong></div></button>`}).join('')||'<div class="panel empty">Nessun viaggio ancora. Aggiungine uno!</div>'}</div><div class="panel"><div class="section-head"><h2>Il tuo archivio</h2></div><p class="muted">Puoi aggiungere nuovi viaggi, aggiornare le spese e modificare le date in qualsiasi momento.</p><div class="inline-actions"><button class="btn" data-action="export">⬇️ Esporta backup JSON</button><button class="btn" data-action="import-json">⬆️ Importa viaggi / backup</button><input id="backup-input" type="file" accept="application/json,.json" hidden></div><p class="muted" style="font-size:12px">Per importare i viaggi storici seleziona il file privato viaggi-storici.json dal telefono. Non caricarlo su GitHub.</p></div>`;
+ return `<section class="hero"><div class="eyebrow">✧ Colleziona momenti, non cose ✧</div><h1>Around the World</h1><p>Un diario personale di destinazioni, ricordi e spese. Ogni viaggio è una storia da conservare.</p></section><div class="stats"><div class="stat"><strong>${trips.length}</strong><small>Viaggi</small></div><div class="stat"><strong>${ys.length}</strong><small>Anni</small></div><div class="stat"><strong class="home-amount" aria-label="Totale ${amountsVisible?'visibile':'nascosto'}">${homeAmount(total)}</strong><small>Spesa totale</small></div></div><div class="section-head"><h2>Il tuo diario</h2><div class="inline-actions"><button class="btn privacy-toggle" data-action="toggle-amounts" title="${amountsVisible?'Nascondi i totali':'Mostra i totali'}" aria-label="${amountsVisible?'Nascondi i totali':'Mostra i totali'}" aria-pressed="${amountsVisible}">${amountsVisible?'👁️ Nascondi':'🙈 Mostra'}</button><button class="btn primary" data-action="new">+ Nuovo viaggio</button></div></div><div class="years">${ys.map(y=>{const list=trips.filter(t=>tripYear(t)===y);return `<button class="year-card" data-year="${y}"><div class="year">${y} ✧</div><div class="foot"><small>${list.length} ${list.length===1?'viaggio':'viaggi'}</small><strong class="home-amount">${homeAmount(list.reduce((a,t)=>a+sum(t),0))}</strong></div></button>`}).join('')||'<div class="panel empty">Nessun viaggio ancora. Aggiungine uno!</div>'}</div><button class="world-invite" data-action="world"><span><b>🌍 3P Map</b><small>Scopri gli Stati colorati sulla mappa, come un passaporto digitale</small></span><span class="globe-icon" aria-hidden="true">↗</span></button><div class="panel"><div class="section-head"><h2>Il tuo archivio</h2></div><p class="muted">Puoi aggiungere nuovi viaggi, aggiornare le spese e modificare le date in qualsiasi momento.</p><div class="inline-actions"><button class="btn" data-action="export">⬇️ Esporta backup JSON</button><button class="btn" data-action="import-json">⬆️ Importa viaggi / backup</button><input id="backup-input" type="file" accept="application/json,.json" hidden></div><p class="muted" style="font-size:12px">Per importare i viaggi storici seleziona il file privato viaggi-storici.json dal telefono. Non caricarlo su GitHub.</p></div>`;
 }
 function yearPage(year){const list=trips.filter(t=>tripYear(t)===year).sort((a,b)=>a.startDate.localeCompare(b.startDate));const total=round(list.reduce((a,t)=>a+sum(t),0));return `<button class="back" data-action="home">← Tutti gli anni</button><div class="section-head"><div><div class="eyebrow">L'anno dei ricordi</div><h1 style="font-size:45px;margin:8px 0">${year}</h1><p class="subtitle muted">${list.length} viaggi · ${fmt(total)}</p></div><button class="btn primary" data-action="new">+ Viaggio</button></div><div class="trip-list">${list.map(t=>`<button class="trip-card" data-trip="${esc(t.id)}"><div class="trip-icon">🌍</div><h3>${esc(t.name)}</h3><small>${datefmt(t.startDate)} – ${datefmt(t.endDate)}</small><div class="money">${fmt(sum(t))}</div>${t.review?'<div class="source-chip">⚠️ Anno da verificare</div>':''}</button>`).join('')}</div>`}
-function tripPage(id){const t=trips.find(t=>t.id===id);if(!t){page.screen='home';return home()}const total=round(sum(t));const catValues=CATS.map((c,i)=>({name:c,value:round(t.expenses.filter(e=>e.category===c).reduce((a,e)=>a+Number(e.amount),0)),color:COLORS[i]}));return `<button class="back" data-year="${tripYear(t)}">← Viaggi ${tripYear(t)}</button><div class="section-head"><div><div class="eyebrow">✧ Passaporto dei ricordi</div><h1 style="margin:8px 0 4px;font-size:clamp(33px,5vw,49px)">${esc(t.name)}</h1><p class="muted">${datefmt(t.startDate)} – ${datefmt(t.endDate)} · ${duration(t)} giorni</p></div><div class="inline-actions"><button class="btn" data-action="edit-trip">✏️ Modifica</button><button class="btn danger" data-action="delete-trip">Elimina</button></div></div><div class="stats"><div class="stat"><strong class="home-amount" aria-label="Totale ${amountsVisible?'visibile':'nascosto'}">${homeAmount(total)}</strong><small>Spesa totale</small></div><div class="stat"><strong>${fmt(round(total/duration(t)))}</strong><small>Media al giorno</small></div><div class="stat"><strong>${(t.expenses||[]).length}</strong><small>Voci di spesa</small></div></div>${t.review?`<div class="notice">⚠️ Da verificare: il documento TXT del viaggio indica un anno diverso dal riepilogo PDF. Puoi correggere le date da “Modifica”.</div>`:''}${t.reportedTotal!=null&&Math.abs(total-t.reportedTotal)>.01?`<div class="notice">Totale riportato nel PDF: ${fmt(t.reportedTotal)}. Somma delle categorie: ${fmt(total)}. Verifica la differenza.</div>`:''}<div class="split"><section class="panel"><h2 class="section-title">Dove sono finiti i soldi?</h2><div class="chart-holder"><canvas id="pie" aria-label="Ripartizione delle spese per categoria"></canvas></div></section><section class="panel"><h2 class="section-title">Categorie</h2><ul class="breakdown">${catValues.filter(x=>x.value>0).map(x=>`<li><span><i class="dot" style="background:${x.color}"></i>${esc(x.name)}</span><b>${fmt(x.value)}</b></li>`).join('')||'<li>Non hai ancora spese.</li>'}</ul></section></div><section class="panel"><div class="section-head"><h2>Le tue spese</h2><button class="btn primary" data-action="add-expense">+ Aggiungi spesa</button></div>${(t.expenses||[]).length? t.expenses.map(e=>`<div class="expense-row"><div><b>${esc(e.description||e.category)}</b><small>${esc(e.category)} · ${datefmt(e.date)}${e.summary?' · riepilogo PDF':''}</small></div><strong>${fmt(e.amount)}</strong><button class="btn tiny" data-expense="${esc(e.id)}">✏️</button></div>`).join(''):'<p class="muted">Nessuna spesa. Aggiungi la prima!</p>'}</section><section class="panel"><div class="section-head"><h2>📍 Mappa del viaggio</h2><button class="btn tiny" data-action="expand-map">Espandi</button></div><div id="map" class="map"></div><p class="muted" style="font-size:12px">Le tappe sono una traccia indicativa, non un percorso GPS. Puoi aggiungerle e riordinarle da “Modifica”.</p></section>${t.notes?`<section class="panel"><h2>Ricordi</h2><p>${esc(t.notes).replaceAll('\n','<br>')}</p></section>`:''}${t.originalNotes?`<section class="panel"><details><summary><b>📜 Note di spesa originali</b> (dal file caricato)</summary><p class="notice">Le note originali sono conservate per consultazione: non vengono sommate di nuovo alle categorie del PDF, per evitare duplicazioni.</p><div class="original">${esc(t.originalNotes)}</div></details></section>`:''}`}
+function tripPage(id){const t=trips.find(t=>t.id===id);if(!t){page.screen='home';return home()}const total=round(sum(t));const catValues=CATS.map((c,i)=>({name:c,value:round(t.expenses.filter(e=>e.category===c).reduce((a,e)=>a+Number(e.amount),0)),color:COLORS[i]}));return `<button class="back" data-year="${tripYear(t)}">← Viaggi ${tripYear(t)}</button><div class="section-head"><div><div class="eyebrow">✧ Passaporto dei ricordi</div><h1 style="margin:8px 0 4px;font-size:clamp(33px,5vw,49px)">${esc(t.name)}</h1><p class="muted">${datefmt(t.startDate)} – ${datefmt(t.endDate)} · ${duration(t)} giorni</p></div><div class="inline-actions"><button class="btn" data-action="edit-trip">✏️ Modifica</button><button class="btn danger" data-action="delete-trip">Elimina</button></div></div><div class="stats"><div class="stat"><strong class="home-amount" aria-label="Totale del viaggio">${fmt(total)}</strong><small>Spesa totale</small></div><div class="stat"><strong>${fmt(round(total/duration(t)))}</strong><small>Media al giorno</small></div><div class="stat"><strong>${(t.expenses||[]).length}</strong><small>Voci di spesa</small></div></div>${t.review?`<div class="notice">⚠️ Da verificare: il documento TXT del viaggio indica un anno diverso dal riepilogo PDF. Puoi correggere le date da “Modifica”.</div>`:''}${t.reportedTotal!=null&&Math.abs(total-t.reportedTotal)>.01?`<div class="notice">Totale riportato nel PDF: ${fmt(t.reportedTotal)}. Somma delle categorie: ${fmt(total)}. Verifica la differenza.</div>`:''}<div class="split"><section class="panel"><h2 class="section-title">Dove sono finiti i soldi?</h2><div class="chart-holder"><canvas id="pie" aria-label="Ripartizione delle spese per categoria"></canvas></div></section><section class="panel"><h2 class="section-title">Categorie</h2><ul class="breakdown">${catValues.filter(x=>x.value>0).map(x=>`<li><span><i class="dot" style="background:${x.color}"></i>${esc(x.name)}</span><b>${fmt(x.value)}</b></li>`).join('')||'<li>Non hai ancora spese.</li>'}</ul></section></div><section class="panel"><div class="section-head"><h2>Le tue spese</h2><button class="btn primary" data-action="add-expense">+ Aggiungi spesa</button></div>${(t.expenses||[]).length? t.expenses.map(e=>`<div class="expense-row"><div><b>${esc(e.description||e.category)}</b><small>${esc(e.category)} · ${datefmt(e.date)}${e.summary?' · riepilogo PDF':''}</small></div><strong>${fmt(e.amount)}</strong><button class="btn tiny" data-expense="${esc(e.id)}">✏️</button></div>`).join(''):'<p class="muted">Nessuna spesa. Aggiungi la prima!</p>'}</section><section class="panel"><div class="section-head"><h2>📍 Mappa del viaggio</h2><button class="btn tiny" data-action="expand-map">Espandi</button></div><div id="map" class="map"></div><p class="muted" style="font-size:12px">Le tappe sono una traccia indicativa, non un percorso GPS. Puoi aggiungerle e riordinarle da “Modifica”.</p></section>${t.notes?`<section class="panel"><h2>Ricordi</h2><p>${esc(t.notes).replaceAll('\n','<br>')}</p></section>`:''}${t.originalNotes?`<section class="panel"><details><summary><b>📜 Note di spesa originali</b> (dal file caricato)</summary><p class="notice">Le note originali sono conservate per consultazione: non vengono sommate di nuovo alle categorie del PDF, per evitare duplicazioni.</p><div class="original">${esc(t.originalNotes)}</div></details></section>`:''}`}
 function drawChart(t){if(!window.Chart)return;const vals=CATS.map(c=>round(t.expenses.filter(e=>e.category===c).reduce((a,e)=>a+Number(e.amount),0)));if(!vals.some(v=>v>0))return;chart=new Chart($('#pie'),{type:'doughnut',data:{labels:CATS,datasets:[{data:vals,backgroundColor:COLORS,borderWidth:2,borderColor:'#fffdf7'}]},options:{responsive:true,maintainAspectRatio:false,cutout:'58%',plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`${ctx.label}: ${fmt(ctx.raw)}`}}}}})}
 const KNOWN={'Madrid':[40.4168,-3.7038],'Ios':[36.7226,25.2819],'Ibiza':[38.9067,1.4206],'Vieste':[41.881,16.175],'Barcellona':[41.3874,2.1686],'Sardegna':[40.1209,9.0129],'Sestriere':[44.9596,6.8771],'Londra':[51.5074,-0.1278],'Saragozza':[41.6488,-0.8891],'León':[42.5987,-5.5671],'Oviedo':[43.3614,-5.8494],'Somo':[43.4521,-3.7444],'Santander':[43.4623,-3.81],'Bilbao':[43.263,-2.935],'Tolosa':[43.6047,1.4442],'Marrakech':[31.6295,-7.9811],'Rabat':[34.0209,-6.8416],'Fès':[34.064,-4.9747],'Alicante':[38.3452,-0.481],'Benidorm':[38.5411,-0.1225],'Tabarca':[38.1653,-0.48],'Vilnius':[54.6872,25.2797],'Riga':[56.9496,24.1052],'Bratislava':[48.1486,17.1077],'Vienna':[48.2082,16.3738],'Isola d’Elba':[42.7782,10.1927],'Tenerife':[28.2916,-16.6291],'Vietnam':[16.0471,108.2062],'Nord Est Europa':[54.6872,25.2797],'Indonesia':[-8.4095,115.1889],'Albania':[41.1533,20.1683],'Islanda':[64.9631,-19.0208]};
-function drawMap(t,expand=false){
-  const target = modal?.type==='map' ? document.querySelector('.sheet #map') : document.querySelector('main #map');
-  if (!target) return;
-  // I marker usano coordinate del viaggio oppure coordinate note delle tappe,
-  // mai coordinate ricavate per approssimazione da un nome ambiguo.
-  const points=[];
-  for(const stop of t.stops||[]){
-    const lat=Number(stop.lat),lng=Number(stop.lng);
-    const valid=stop.lat!=null&&stop.lng!=null&&Number.isFinite(lat)&&Number.isFinite(lng)&&Math.abs(lat)<=90&&Math.abs(lng)<=180;
-    const coords=valid?[lat,lng]:KNOWN[stop.name];
-    if(coords)points.push({coords,label:stop.name});
-  }
-  if(!points.length&&Number.isFinite(Number(t.lat))&&Number.isFinite(Number(t.lng))&&t.lat!=null&&t.lng!=null){
-    points.push({coords:[Number(t.lat),Number(t.lng)],label:t.place||t.name});
-  }
-  if(!points.length&&KNOWN[t.place])points.push({coords:KNOWN[t.place],label:t.place});
-  if(!window.L){target.innerHTML='<p class="map-message">Impossibile caricare la mappa. Riprova con una connessione Internet.</p>';return}
-  map=L.map(target,{scrollWheelZoom:false,zoomControl:true,preferCanvas:false});
-  // CARTO è un fornitore di tile distinto da OSM; se non è raggiungibile, riprova con OSM.
-  let tile=L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{
-    subdomains:'abcd',attribution:'&copy; OpenStreetMap contributors &copy; CARTO',maxZoom:19,
-    crossOrigin:true,updateWhenIdle:false,keepBuffer:4
-  }).addTo(map);
-  let fallbackUsed=false;
-  tile.on('tileerror',()=>{
-    if(fallbackUsed||!map)return;
-    fallbackUsed=true;
-    map.removeLayer(tile);
-    tile=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{
-      attribution:'&copy; OpenStreetMap contributors',maxZoom:19,keepBuffer:4
-    }).addTo(map);
-  });
-  for(const p of points)L.marker(p.coords).addTo(map).bindPopup(esc(p.label));
-  if(points.length>1){
-    L.polyline(points.map(p=>p.coords),{color:'#a77c38',weight:4,opacity:.85,dashArray:'8,7'}).addTo(map);
-    map.fitBounds(L.latLngBounds(points.map(p=>p.coords)),{padding:[40,40],maxZoom:11});
-  }else if(points.length){
-    map.setView(points[0].coords,10);
-  }else map.setView([20,0],2);
-  // Safari iOS spesso crea la mappa prima che il contenitore raggiunga le misure finali.
-  const current=map;
-  requestAnimationFrame(()=>requestAnimationFrame(()=>{
-    if(map===current){current.invalidateSize({pan:false}); if(points.length===1)current.panTo(points[0].coords,{animate:false})}
-  }));
-  setTimeout(()=>{if(map===current)current.invalidateSize({pan:false})},400);
-  setTimeout(()=>{if(map===current)current.invalidateSize({pan:false})},1200);
+// La cartografia e' disegnata come SVG locale, senza servizi di map tiles.
+const WORLD_W=1000,WORLD_H=500;
+const latLngToXY=(lat,lng)=>[(Number(lng)+180)/360*WORLD_W,(90-Number(lat))/180*WORLD_H];
+function coordsToPath(geometry){
+ if(!geometry)return '';
+ const polygons=geometry.type==='Polygon'?[geometry.coordinates]:geometry.type==='MultiPolygon'?geometry.coordinates:[];
+ return polygons.map(poly=>poly.map(ring=>ring.map((pt,i)=>{
+ const xy=latLngToXY(pt[1],pt[0]);return (i===0?'M':'L')+xy[0].toFixed(1)+' '+xy[1].toFixed(1)
+ }).join(' ')+' Z').join(' ')).join(' ');
+}
+function pointInRing(lng,lat,ring){let inside=false;for(let i=0,j=ring.length-1;i<ring.length;j=i++){
+ const xi=ring[i][0],yi=ring[i][1],xj=ring[j][0],yj=ring[j][1];if((yi>lat)!==(yj>lat)&&lng<(xj-xi)*(lat-yi)/(yj-yi)+xi)inside=!inside
+ }return inside}
+function insideGeometry(lng,lat,geom){
+ if(!geom)return false;const polygons=geom.type==='Polygon'?[geom.coordinates]:geom.type==='MultiPolygon'?geom.coordinates:[];
+ return polygons.some(p=>p[0]&&pointInRing(lng,lat,p[0])&&!p.slice(1).some(h=>pointInRing(lng,lat,h)))
+}
+const COUNTRY_HINTS=[
+ ['Spagna on the road',['ESP','FRA']],['Alicante e Benidorm',['ESP']],['Bratislava e Vienna',['SVK','AUT']],
+ ['Nord Est Europa',['LTU','LVA']],['Vilnius',['LTU','LVA']],['Marocco',['MAR']],['Marrakech',['MAR']],
+ ['Tenerife',['ESP']],['Ibiza',['ESP']],['Madrid',['ESP']],['Barcellona',['ESP']],['Somo',['ESP']],
+ ['Ios',['GRC']],['Vieste',['ITA']],['Isola d’Elba',['ITA']],['Sardegna',['ITA']],['Sestriere',['ITA']],
+ ['Londra',['GBR']],['Indonesia',['IDN']],['Albania',['ALB']],['Islanda',['ISL']],['Vietnam',['VNM']]
+];
+const COORD_OVERRIDES={Tenerife:'ESP',Ibiza:'ESP',Ios:'GRC',Sardegna:'ITA','Isola d’Elba':'ITA',Tabarca:'ESP'};
+function getIsoForPoint(lat,lng){
+ if(!worldGeo)return null;
+ const f=worldGeo.features.find(f=>insideGeometry(lng,lat,f.geometry));return f?.properties?.iso||null;
+}
+function visitedCodes(){const result=new Set();for(const t of trips){
+ const key=String(t.name||'').toLowerCase();const place=String(t.place||'').toLowerCase();
+ for(const [n,codes] of COUNTRY_HINTS)if(key===n.toLowerCase()||place===n.toLowerCase())codes.forEach(c=>result.add(c));
+ const locations=[{name:t.place,lat:t.lat,lng:t.lng},...(t.stops||[])];
+ for(const loc of locations){const nm=String(loc.name||'');const ov=Object.entries(COORD_OVERRIDES).find(([k])=>k.toLowerCase()===nm.toLowerCase());if(ov){result.add(ov[1]);continue}
+ let lat=loc.lat,lng=loc.lng;const known=KNOWN[nm];if((lat==null||lng==null)&&known){lat=known[0];lng=known[1]}
+ if(lat!=null&&lng!=null){const iso=getIsoForPoint(Number(lat),Number(lng));if(iso&&iso!=='-99')result.add(iso)}
+ }
+ }return result}
+function tripPoints(t){const points=[];
+ for(const stop of t.stops||[]){let lat=stop.lat,lng=stop.lng;
+ if((lat==null||lng==null)&&KNOWN[stop.name]){[lat,lng]=KNOWN[stop.name]}
+ if(lat!=null&&lng!=null&&Number.isFinite(Number(lat))&&Number.isFinite(Number(lng)))points.push({lat:Number(lat),lng:Number(lng),label:stop.name})
+ }
+ if(!points.length){let lat=t.lat,lng=t.lng;if((lat==null||lng==null)&&KNOWN[t.place])[lat,lng]=KNOWN[t.place];if(lat!=null&&lng!=null)points.push({lat:Number(lat),lng:Number(lng),label:t.place||t.name})}
+ return points;
+}
+function initialView(points){if(!points.length)return [0,0,1000,500];
+ const ps=points.map(p=>latLngToXY(p.lat,p.lng));let minx=Math.min(...ps.map(x=>x[0])),maxx=Math.max(...ps.map(x=>x[0])),miny=Math.min(...ps.map(x=>x[1])),maxy=Math.max(...ps.map(x=>x[1]));
+ let w=Math.max(45,maxx-minx+25),h=Math.max(34,maxy-miny+18);if(points.length===1){w=95;h=70}
+ // Mantieni la mappa entro il mondo e uno zoom moderato, con spazio per vedere confini e tappe.
+ w=Math.min(1000,w);h=Math.min(500,h);const aspect=1.6;if(w/h<aspect)w=Math.min(1000,h*aspect);else h=Math.min(500,w/aspect);
+ const cx=(minx+maxx)/2,cy=(miny+maxy)/2;
+ return [Math.max(0,Math.min(1000-w,cx-w/2)),Math.max(0,Math.min(500-h,cy-h/2)),w,h]
+}
+function pathsSvg(visited,interactive){return (worldGeo?.features||[]).map((f,i)=>{
+ const iso=f.properties.iso;const vis=visited.has(iso);return `<path class="land${vis?' visited':''}" d="${coordsToPath(f.geometry)}" data-country="${esc(iso)}" tabindex="${interactive?0:-1}" role="${interactive?'button':'img'}"><title>${esc(f.properties.name)}${vis?' · visitato':''}</title></path>`
+ }).join('')}
+function mapSvg(points,key,world=false){
+ if(!worldGeo)return '<div class="map-message">🌍 Preparazione della cartina…</div>';
+ const view=worldViews[key]||(!world&&points.length?initialView(points):[0,0,1000,500]);const visited=visitedCodes();
+ const routes=points.length>1?`<polyline class="route" points="${points.map(p=>latLngToXY(p.lat,p.lng).map(n=>n.toFixed(1)).join(',')).join(' ')}" />`:'';
+ const circles=points.map((p,i)=>{const [x,y]=latLngToXY(p.lat,p.lng);return `<circle class="stop-halo" cx="${x}" cy="${y}" r="${Math.max(1.5,view[2]/175).toFixed(1)}"><title>${esc(p.label)}</title></circle><circle class="stop" cx="${x}" cy="${y}" r="${Math.max(.9,view[2]/350).toFixed(1)}"><title>${esc(p.label)}</title></circle>`}).join('');
+ const viewBox=view.map(n=>Number(n).toFixed(2)).join(' ');
+ return `<div class="vector-wrap"><svg class="vector-svg${world?'':' detail'}" viewBox="${viewBox}" role="img" aria-label="${world?'Mappa del mondo con i paesi visitati in oro':'Mappa del viaggio con le tappe e una linea indicativa'}" preserveAspectRatio="xMidYMid meet">${pathsSvg(visited,world)}${routes}${circles}</svg><div class="vector-tools"><span>${world?'Oro = Paese visitato':'I punti e la linea indicano le tappe, non le strade percorse'}</span><span class="map-buttons"><button type="button" data-map-zoom="in" data-map-key="${key}" aria-label="Ingrandisci mappa">+</button><button type="button" data-map-zoom="out" data-map-key="${key}" aria-label="Riduci mappa">−</button><button type="button" data-map-zoom="reset" data-map-key="${key}" aria-label="Reimposta mappa">⌂</button></span></div></div>`
+}
+function drawMap(t){const target=modal?.type==='map'?document.querySelector('.sheet #map'):document.querySelector('main #map');if(!target)return;
+ const points=tripPoints(t);target.innerHTML=mapSvg(points,'trip-'+t.id,false);
+}
+function worldPage(){return `<button class="back" data-action="home">← Torna al diario</button><section class="panel world-overview"><div class="world-intro"><div><div class="eyebrow">✧ Il passaporto di 3P ✧</div><h1>🌍 3P Map</h1><p class="muted">I Paesi visitati sono colorati in oro. Tocca uno Stato per scoprirne il nome.</p></div><strong style="font-size:24px;color:#173c64" id="country-count"></strong></div><div id="world-map" style="margin-top:15px"></div><div class="world-key"><span><i class="swatch" style="background:#d7a85e"></i>Visitato</span><span><i class="swatch" style="background:#e6dfca"></i>Da esplorare</span></div><h2>Paesi visitati</h2><div id="countries-list" class="country-tags"></div><p class="muted" style="font-size:12px">I Paesi vengono ricavati dai viaggi e dalle coordinate disponibili. Se una tappa è ambigua o manca, puoi aggiornarla nella scheda del viaggio. I confini sono semplificati.</p></section>`}
+function drawWorldMap(){const target=$('#world-map');if(!target)return;target.innerHTML=mapSvg([],'world',true);
+ if(!worldGeo)return;const visited=visitedCodes();const names=worldGeo.features.filter(f=>visited.has(f.properties.iso)).map(f=>f.properties.name).sort((a,b)=>a.localeCompare(b,'it'));
+ const counter=$('#country-count');if(counter)counter.textContent=names.length+' Paesi';const listing=$('#countries-list');if(listing)listing.innerHTML=names.map(n=>`<span class="country-tag">✓ ${esc(n)}</span>`).join('')||'Nessun Paese ancora';
+}
+function changeMapZoom(key,mode){const points=key.startsWith('trip-')?tripPoints(trips.find(t=>t.id===key.slice(5))||{stops:[]}):[];
+ const original=key==='world'?[0,0,1000,500]:initialView(points);const current=worldViews[key]||original;
+ if(mode==='reset'){delete worldViews[key]}else{let factor=mode==='in'?.65:1.5;let w=Math.min(1000,Math.max(14,current[2]*factor)),h=Math.min(500,Math.max(7,current[3]*factor));const x=current[0]+current[2]/2,y=current[1]+current[3]/2;worldViews[key]=[Math.max(0,Math.min(1000-w,x-w/2)),Math.max(0,Math.min(500-h,y-h/2)),w,h]}
+ if(page.screen==='world')drawWorldMap();else{const t=trips.find(t=>t.id===page.id);if(t)drawMap(t)}
+}
+async function loadWorldGeo(){if(worldGeo||worldLoading)return;worldLoading=true;
+ try{const response=await fetch('./assets/world-countries.geojson',{cache:'force-cache'});if(!response.ok)throw new Error('HTTP '+response.status);worldGeo=await response.json();if(activeUser){if(page.screen==='world')drawWorldMap();if(page.screen==='trip'){const t=trips.find(t=>t.id===page.id);if(t)drawMap(t)}}}
+ catch(e){console.error('Cartina offline non caricata:',e);const els=document.querySelectorAll('.map-message');els.forEach(x=>x.textContent='Cartina non disponibile: verifica che assets/world-countries.geojson sia stato caricato su GitHub.')}finally{worldLoading=false}
 }
 function textField(label,name,value='',type='text',wide=false){return `<div class="field${wide?' wide':''}"><label for="${name}">${label}</label><input id="${name}" name="${name}" type="${type}" value="${esc(value)}" ${['name','startDate','endDate'].includes(name)?'required':''}></div>`}
 function modalHtml(){
@@ -135,8 +171,8 @@ function modalHtml(){
 }
 function openModal(type,item=null){modal={type,item};render()}
 function closeModal(){modal=null;render()}
-function actionHandler(action){const t=trips.find(t=>t.id===page.id);switch(action){case'home':goHome();break;case'toggle-amounts':amountsVisible=!amountsVisible;localStorage.setItem('viaggi-home-amounts',amountsVisible?'show':'hide');render();break;case'new':openModal('trip');break;case'close':closeModal();break;case'logout':logout();break;case'export':exportBackup();break;case'import-json':$('#backup-input')?.click();break;case'edit-trip':openModal('trip',t);break;case'add-expense':openModal('expense');break;case'expand-map':openModal('map');break;case'delete-trip':if(t&&confirm(`Eliminare definitivamente “${t.name}”?`)){removeTrip(t.id).then(goHome).catch(e=>toast(e.message))}break;case'delete-expense':if(t&&modal?.item&&confirm('Eliminare questa spesa?')){store({...t,expenses:t.expenses.filter(e=>e.id!==modal.item.id)}).then(closeModal).catch(e=>toast(e.message))}break;}}
-document.addEventListener('click',e=>{if(!activeUser)return;const expense=e.target.closest('[data-expense]');if(expense){const t=trips.find(t=>t.id===page.id);openModal('expense',t?.expenses.find(x=>x.id===expense.dataset.expense));return}const trip=e.target.closest('[data-trip]');if(trip){selectTrip(trip.dataset.trip);return}const year=e.target.closest('[data-year]');if(year){selectYear(Number(year.dataset.year));return}const act=e.target.closest('[data-action]');if(act)actionHandler(act.dataset.action)});
+function actionHandler(action){const t=trips.find(t=>t.id===page.id);switch(action){case'home':goHome();break;case'world':page={screen:'world',year:null,id:null};render();window.scrollTo(0,0);break;case'toggle-amounts':amountsVisible=!amountsVisible;localStorage.setItem('viaggi-home-amounts',amountsVisible?'show':'hide');render();break;case'new':openModal('trip');break;case'close':closeModal();break;case'logout':logout();break;case'export':exportBackup();break;case'import-json':$('#backup-input')?.click();break;case'edit-trip':openModal('trip',t);break;case'add-expense':openModal('expense');break;case'expand-map':openModal('map');break;case'delete-trip':if(t&&confirm(`Eliminare definitivamente “${t.name}”?`)){removeTrip(t.id).then(goHome).catch(e=>toast(e.message))}break;case'delete-expense':if(t&&modal?.item&&confirm('Eliminare questa spesa?')){store({...t,expenses:t.expenses.filter(e=>e.id!==modal.item.id)}).then(closeModal).catch(e=>toast(e.message))}break;}}
+document.addEventListener('click',e=>{if(!activeUser)return;const zoom=e.target.closest('[data-map-zoom]');if(zoom){changeMapZoom(zoom.dataset.mapKey,zoom.dataset.mapZoom);return}const country=e.target.closest('[data-country]');if(country&&page.screen==='world'){const f=worldGeo?.features.find(f=>f.properties.iso===country.dataset.country);if(f)toast(f.properties.name+(visitedCodes().has(f.properties.iso)?' · visitato':' · da esplorare'));return}const expense=e.target.closest('[data-expense]');if(expense){const t=trips.find(t=>t.id===page.id);openModal('expense',t?.expenses.find(x=>x.id===expense.dataset.expense));return}const trip=e.target.closest('[data-trip]');if(trip){selectTrip(trip.dataset.trip);return}const year=e.target.closest('[data-year]');if(year){selectYear(Number(year.dataset.year));return}const act=e.target.closest('[data-action]');if(act)actionHandler(act.dataset.action)});
 document.addEventListener('submit',async e=>{
  if(e.target.id==='login-form'){
    e.preventDefault();const form=e.target;const btn=form.querySelector('button[type=submit]');btn.disabled=true;
@@ -168,4 +204,4 @@ document.addEventListener('change',async e=>{
  }catch(err){toast('Errore importazione: '+err.message)}
  finally{e.target.value=''}
 });
-render();initFirebase();
+render();initFirebase();loadWorldGeo();
